@@ -1,0 +1,12 @@
+[package]
+name = "rpgsave"
+version = "0.1.0"
+edition = "2024"
+description = "Ruby Marshal (4.8) codec and RPG Maker XP/VX/VX Ace save-game model"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+encoding_rs = "0.8"
+
+[dev-dependencies]
+serde_json = "1"
