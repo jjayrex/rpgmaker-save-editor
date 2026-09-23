@@ -73,6 +73,8 @@ pub struct Summary {
 
     pub has_playtime: bool,
     pub playtime_seconds: i64,
+    /// Frames per second the engine counts play time in.
+    pub frame_rate: i64,
     pub playtime_text: String,
     pub save_count: Option<i64>,
 
@@ -138,6 +140,9 @@ pub struct ActorView {
     pub tp: Option<f64>,
     pub max_hp: Option<i64>,
     pub max_mp: Option<i64>,
+    /// What this engine calls the secondary pool, and where it keeps it.
+    pub mp_label: String,
+    pub mp_ivar: String,
 
     pub params: Vec<ParamView>,
     pub equips: Vec<EquipSlot>,

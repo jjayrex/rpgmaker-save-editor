@@ -255,7 +255,7 @@ fn WelcomeScreen() -> impl IntoView {
             <div class="welcome-card">
                 <h1>"RPG Maker Save Editor"</h1>
                 <p>
-                    "Open a save file from RPG Maker VX Ace or RPG Maker VX."
+                    "Open a save file from RPG Maker VX Ace, VX or XP."
                 </p>
                 <button class="btn primary large" on:click=open>"Open a save file…"</button>
                 <p class="muted small">

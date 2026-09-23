@@ -41,6 +41,15 @@ pub const VX_PARAMS: [(&str, &str); 6] = [
     ("Spirit", "@spi_plus"),
     ("Agility", "@agi_plus"),
 ];
+/// XP's six parameters, in the order its database tables store them.
+pub const XP_PARAMS: [(&str, &str); 6] = [
+    ("Max HP", "@maxhp_plus"),
+    ("Max SP", "@maxsp_plus"),
+    ("Strength", "@str_plus"),
+    ("Dexterity", "@dex_plus"),
+    ("Agility", "@agi_plus"),
+    ("Intelligence", "@int_plus"),
+];
 
 /// Default equipment slot names, used when the database is not available.
 pub const DEFAULT_SLOTS: [&str; 5] = ["Weapon", "Shield", "Head", "Body", "Accessory"];
@@ -68,10 +77,7 @@ impl SaveFile {
                 value
             }
             // No previous string to copy from: follow the engine's convention.
-            _ => match self.engine {
-                Engine::VxAce => self.heap.new_utf8_str(text),
-                Engine::Vx => self.heap.new_str(text),
-            },
+            _ => super::save::new_engine_string(&mut self.heap, self.engine, text),
         };
         self.dirty = true;
         self.heap.set_ivar(actor, ivar, new)
@@ -160,8 +166,20 @@ impl SaveFile {
         param_id: u32,
         data: Option<&GameData>,
     ) -> Option<i64> {
-        let class = data?.class(self.actor_class_id(actor)?)?;
-        class.param(param_id, self.actor_level(actor)?)
+        let data = data?;
+        let level = self.actor_level(actor)?;
+        // XP stores each actor's stat curve on the actor itself; VX and VX Ace
+        // put it on the class.
+        if let Some(params) = self
+            .heap
+            .ivar_int(actor, "@actor_id")
+            .and_then(|id| data.actor(id))
+            .and_then(|info| info.params.as_ref())
+            && let Some(value) = params.get(param_id, level.max(0) as u32, 0)
+        {
+            return Some(i64::from(value));
+        }
+        data.class(self.actor_class_id(actor)?)?.param(param_id, level)
     }
 
     /// `(label, ivar, index, value)` for each stat bonus the actor carries.
@@ -176,7 +194,11 @@ impl SaveFile {
                 })
                 .collect();
         }
-        VX_PARAMS
+        let table: &[(&str, &str)] = match self.engine {
+            Engine::Xp => &XP_PARAMS,
+            _ => &VX_PARAMS,
+        };
+        table
             .iter()
             .enumerate()
             .filter_map(|(i, (label, ivar))| {
@@ -196,7 +218,11 @@ impl SaveFile {
             self.dirty = true;
             return true;
         }
-        let Some((_, ivar)) = VX_PARAMS.get(index) else { return false };
+        let table: &[(&str, &str)] = match self.engine {
+            Engine::Xp => &XP_PARAMS,
+            _ => &VX_PARAMS,
+        };
+        let Some((_, ivar)) = table.get(index) else { return false };
         if self.heap.ivar(actor, ivar).is_none() {
             return false;
         }
@@ -329,8 +355,9 @@ impl SaveFile {
 
         // Without the database the engine clamps an over-large value on its
         // next refresh, so a generous number is safe and still heals fully.
+        let mp_ivar = self.engine.mp_ivar();
         self.heap.set_ivar(actor, "@hp", Value::Int(max_hp.unwrap_or(9_999)));
-        self.heap.set_ivar(actor, "@mp", Value::Int(max_mp.unwrap_or(9_999)));
+        self.heap.set_ivar(actor, mp_ivar, Value::Int(max_mp.unwrap_or(9_999)));
         self.set_actor_states(actor, &[]);
         self.dirty = true;
         true

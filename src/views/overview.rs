@@ -35,6 +35,7 @@ fn PartyCard(summary: Summary) -> impl IntoView {
     let steps = summary.steps;
     let playtime = summary.playtime_seconds;
     let has_playtime = summary.has_playtime;
+    let frame_rate = summary.frame_rate;
 
     let set_gold = move |value: i64| {
         spawn_local(async move { ctx.accept(api::set_gold(value).await) });
@@ -56,7 +57,7 @@ fn PartyCard(summary: Summary) -> impl IntoView {
                             </span>
                         })}
                         <p class="hint">
-                            "Both engines cap gold at "{group_digits(99_999_999)}"."
+                            "Gold caps at "{group_digits(99_999_999)}"."
                         </p>
                     </>
                 }.into_any(),
@@ -76,14 +77,14 @@ fn PartyCard(summary: Summary) -> impl IntoView {
                     </p>
                 }
             >
-                <PlaytimeRow seconds=playtime/>
+                <PlaytimeRow seconds=playtime frame_rate=frame_rate/>
             </Show>
         </section>
     }
 }
 
 #[component]
-fn PlaytimeRow(seconds: i64) -> impl IntoView {
+fn PlaytimeRow(seconds: i64, frame_rate: i64) -> impl IntoView {
     let ctx = ctx();
     let hours = seconds / 3600;
     let minutes = seconds / 60 % 60;
@@ -107,7 +108,9 @@ fn PlaytimeRow(seconds: i64) -> impl IntoView {
                 <span class="unit">"s"</span>
             </span>
         })}
-        <p class="hint">{format!("Stored as {} frames at 60 fps.", seconds * 60)}</p>
+        <p class="hint">
+            {format!("Stored as {} frames at {frame_rate} fps.", seconds * frame_rate)}
+        </p>
     }
 }
 

@@ -200,3 +200,177 @@ File.open("unknown_playtime.rvdata2", "wb") do |f|
   Marshal.dump(odd, f)
 end
 puts "wrote unknown_playtime.rvdata2 (#{File.size('unknown_playtime.rvdata2')} bytes)"
+
+# ------------------------------------------------------------ RPG Maker XP
+#
+# Twelve documents: the character list, the frame count, then the game objects,
+# with Game_Screen among them and no Game_Message.
+
+def xp_actor(id, name, class_id, level)
+  shaped(Game_Actor,
+    actor_id: id,
+    name: gen(name, true),
+    character_name: gen("001-Fighter01", true),
+    character_hue: 0,
+    battler_name: gen("001-Fighter01", true),
+    battler_hue: 0,
+    class_id: class_id,
+    level: level,
+    exp: level * level * 12,
+    exp_list: Array.new(101) { |i| i * i * 12 },
+    hp: 400 + level * 20,
+    sp: 80 + level * 5,
+    skills: [1, 2, 7],
+    states: [],
+    states_turn: {},
+    weapon_id: id,
+    armor1_id: 1,
+    armor2_id: 0,
+    armor3_id: 0,
+    armor4_id: 2,
+    maxhp_plus: 0,
+    maxsp_plus: 0,
+    str_plus: 4,
+    dex_plus: 0,
+    agi_plus: 0,
+    int_plus: 0)
+end
+
+def build_xp_state
+  actors = [nil]
+  actors << xp_actor(1, "Aluxes", 1, 12)
+  actors << xp_actor(2, "Basil", 2, 11)
+  actors << xp_actor(3, "Hilda", 3, 9)
+
+  switches = Array.new(40, nil)
+  [1, 2, 5, 13].each { |i| switches[i] = true }
+  variables = Array.new(40, nil)
+  { 1 => 7, 2 => 100, 6 => -25, 11 => 999_999 }.each { |k, v| variables[k] = v }
+
+  {
+    # The party holds the actor objects themselves, shared with Game_Actors.
+    party: shaped(Game_Party,
+      actors: [actors[1], actors[2]],
+      gold: 12_345,
+      steps: 4_207,
+      items: { 1 => 9, 2 => 3, 7 => 1 },
+      weapons: { 1 => 1, 2 => 1 },
+      armors: { 1 => 2, 2 => 1 }),
+    actors_root: Game_Actors.new(actors),
+    system: shaped(Game_System,
+      map_interpreter: nil, battle_interpreter: nil, timer: 0, timer_working: false,
+      save_disabled: false, menu_disabled: false, encounter_disabled: false,
+      message_position: 2, message_frame: 0, save_count: 5, magic_number: 72_414_642),
+    switches: Game_Switches.new(switches),
+    variables: Game_Variables.new(variables),
+    self_switches: Game_SelfSwitches.new(
+      { [3, 4, gen("A", true)] => true, [3, 9, gen("B", true)] => true }),
+    screen: shaped(Game_Screen,
+      brightness: 255, tone: Tone.new(0.0, 0.0, 0.0, 0.0),
+      flash_color: Color.new(0.0, 0.0, 0.0, 0.0), shake: 0,
+      pictures: Array.new(51) { nil }, weather_type: 0, weather_max: 0.0),
+    troop: shaped(Game_Troop, enemies: [], turn_count: 0, interpreter: nil),
+    map: shaped(Game_Map,
+      map_id: 3, display_x: 0, display_y: 0, events: {},
+      map: RPG::Map.new, need_refresh: false),
+    player: shaped(Game_Player,
+      id: 0, x: 8, y: 6, real_x: 8 * 128, real_y: 6 * 128, direction: 2,
+      character_name: gen("001-Fighter01", true), character_hue: 0,
+      opacity: 255, blend_type: 0, move_speed: 4, move_frequency: 6,
+      transparent: false),
+    characters: [[gen("001-Fighter01", true), 0], [gen("001-Fighter01", true), 0]],
+  }
+end
+
+def write_xp_save(path, state)
+  File.open(path, "wb") do |f|
+    Marshal.dump(state[:characters], f)
+    Marshal.dump(3 * 3600 * 40, f)          # three hours at XP's 40 fps
+    [:system, :switches, :variables, :self_switches, :screen,
+     :actors_root, :party, :troop, :map, :player].each { |k| Marshal.dump(state[k], f) }
+  end
+end
+
+write_xp_save("xp_save.rxdata", build_xp_state)
+puts "wrote xp_save.rxdata (#{File.size('xp_save.rxdata')} bytes)"
+
+# The same save inside a game folder, next to a database to resolve names with.
+FileUtils.mkdir_p("xp_project/Data")
+File.write("xp_project/Game.ini",
+           "[Game]\nLibrary=RGSS104E.dll\nScripts=Data\\Scripts.rxdata\nTitle=Lantern of Ys\n")
+
+xp_switch_names = Array.new(40, gen("", true))
+{ 1 => "Met the innkeeper", 2 => "Bridge repaired", 3 => "Secret door open",
+  5 => "Boat unlocked", 7 => "Heard the rumour", 13 => "Chapter 2" }
+  .each { |k, v| xp_switch_names[k] = gen(v, true) }
+xp_variable_names = Array.new(40, gen("", true))
+{ 1 => "Quest stage", 2 => "Reputation", 6 => "Debt owed", 11 => "Score" }
+  .each { |k, v| xp_variable_names[k] = gen(v, true) }
+
+def xp_parameters
+  table = Table.new(6, 100)
+  100.times do |lv|
+    [500 + 35 * lv, 80 + 8 * lv, 12 + lv, 11 + lv, 10 + lv, 9 + lv]
+      .each_with_index { |value, p| table[lv * 6 + p] = value }
+  end
+  table
+end
+
+xp_db = {
+  "System" => shaped(RPG::System,
+    magic_number: 72_414_642,
+    switches: xp_switch_names,
+    variables: xp_variable_names,
+    words: shaped(RPG::System::Words,
+      gold: gen("G", true), hp: gen("HP", true), sp: gen("SP", true),
+      weapon: gen("Weapon", true), armor1: gen("Shield", true),
+      armor2: gen("Helmet", true), armor3: gen("Body Armor", true),
+      armor4: gen("Accessory", true)),
+    party_members: [1, 2],
+    start_map_id: 3, start_x: 8, start_y: 6),
+  "Actors" => [nil,
+    shaped(RPG::Actor, id: 1, name: gen("Aluxes", true), class_id: 1, initial_level: 1,
+           final_level: 99, exp_basis: 30, exp_inflation: 30, parameters: xp_parameters,
+           character_name: gen("001-Fighter01", true), character_hue: 0, weapon_id: 1),
+    shaped(RPG::Actor, id: 2, name: gen("Basil", true), class_id: 2, initial_level: 1,
+           final_level: 99, exp_basis: 30, exp_inflation: 30, parameters: xp_parameters,
+           character_name: gen("002-Fighter02", true), character_hue: 0, weapon_id: 2),
+    shaped(RPG::Actor, id: 3, name: gen("Hilda", true), class_id: 3, initial_level: 1,
+           final_level: 99, exp_basis: 30, exp_inflation: 30, parameters: xp_parameters,
+           character_name: gen("005-Mage01", true), character_hue: 0, weapon_id: 3)],
+  "Classes" => [nil,
+    shaped(RPG::Class, id: 1, name: gen("Fighter", true), position: 0),
+    shaped(RPG::Class, id: 2, name: gen("Lancer", true), position: 1),
+    shaped(RPG::Class, id: 3, name: gen("Warlock", true), position: 2)],
+  "Items" => [nil,
+    shaped(RPG::Item, id: 1, name: gen("Potion", true), icon_name: gen("032-Item01", true),
+           description: gen("Restores 200 HP.", true), price: 50),
+    shaped(RPG::Item, id: 2, name: gen("Hi-Potion", true), icon_name: gen("032-Item01", true),
+           description: gen("Restores 800 HP.", true), price: 300),
+    shaped(RPG::Item, id: 3, name: gen("Antidote", true), icon_name: gen("033-Item02", true),
+           description: gen("Cures poison.", true), price: 20),
+    shaped(RPG::Item, id: 7, name: gen("Harbour Key", true), icon_name: gen("034-Item03", true),
+           description: gen("Opens the dock gate.", true), price: 0)],
+  "Weapons" => [nil,
+    shaped(RPG::Weapon, id: 1, name: gen("Bronze Sword", true), price: 120, atk: 10),
+    shaped(RPG::Weapon, id: 2, name: gen("Storm Rod", true), price: 900, atk: 26)],
+  "Armors" => [nil,
+    shaped(RPG::Armor, id: 1, name: gen("Leather Shield", true), price: 90, kind: 0),
+    shaped(RPG::Armor, id: 2, name: gen("Travel Cloak", true), price: 150, kind: 2),
+    shaped(RPG::Armor, id: 9, name: gen("Gale Charm", true), price: 700, kind: 3)],
+  "Skills" => [nil,
+    shaped(RPG::Skill, id: 1, name: gen("Attack", true), sp_cost: 0),
+    shaped(RPG::Skill, id: 2, name: gen("Guard", true), sp_cost: 0),
+    shaped(RPG::Skill, id: 7, name: gen("Spark", true), sp_cost: 8)],
+  "States" => [nil,
+    shaped(RPG::State, id: 1, name: gen("Knockout", true), restriction: 4),
+    shaped(RPG::State, id: 4, name: gen("Poison", true), restriction: 0)],
+  "MapInfos" => {
+    1 => RPG::MapInfo.new(gen("World", true)),
+    3 => RPG::MapInfo.new(gen("Harbor Town", true), 1, 2),
+    12 => RPG::MapInfo.new(gen("Sunken Vault", true), 1, 3),
+  },
+}
+xp_db.each { |name, value| File.binwrite("xp_project/Data/#{name}.rxdata", Marshal.dump(value)) }
+write_xp_save("xp_project/Save1.rxdata", build_xp_state)
+puts "wrote xp_project/"

@@ -247,3 +247,38 @@ fn a_vx_save_goes_through_the_same_commands() {
         .expect("set_actor_level");
     assert_eq!(actor.exp, Some(4_000));
 }
+
+#[test]
+fn an_xp_save_goes_through_the_same_commands() {
+    let webview = editor();
+    let summary = open(&webview, "xp_project/Save1.rxdata");
+    assert_eq!(summary.engine, "xp");
+    assert_eq!(summary.engine_label, "XP");
+    assert_eq!(summary.frame_rate, 40, "XP counts play time at 40 fps");
+    assert_eq!(summary.gold, Some(12_345));
+    assert_eq!(summary.party[0].name, "Aluxes");
+    assert_eq!(summary.map_name.as_deref(), Some("Harbor Town"));
+
+    let actor: ActorView = call(&webview, "get_actor", json!({ "actorId": 1 })).expect("get_actor");
+    assert_eq!(actor.mp_label, "SP");
+    assert_eq!(actor.mp_ivar, "@sp");
+    assert_eq!(actor.equips[1].label, "Shield", "slot names come from XP's words");
+    assert_eq!(actor.params[2].label, "Strength");
+
+    // The interface sends whichever field name the view reported.
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_int",
+        json!({ "actorId": 1, "ivar": actor.mp_ivar, "value": 42 }),
+    )
+    .expect("set_actor_int");
+    assert_eq!(actor.mp, Some(42));
+
+    // Adding an actor the save has never created is refused, with a reason.
+    let error = call::<Summary>(&webview, "set_party", json!({ "ids": [1, 99] }))
+        .expect_err("actor 99 does not exist in this save");
+    assert!(error.contains("has not been created"), "got: {error}");
+
+    let summary: Summary = call(&webview, "set_party", json!({ "ids": [2, 1] })).expect("set_party");
+    assert_eq!(summary.party.iter().map(|m| m.actor_id).collect::<Vec<_>>(), vec![2, 1]);
+}

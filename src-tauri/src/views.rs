@@ -11,10 +11,11 @@ use crate::state::scalar_of;
 /// Instance variables that already have a dedicated editor on the actor page.
 const ACTOR_HANDLED: &[&str] = &[
     "@actor_id", "@name", "@nickname", "@class_id", "@level", "@exp", "@exp_list",
-    "@hp", "@mp", "@tp", "@param_plus", "@equips", "@skills", "@states",
-    "@state_turns", "@state_steps", "@weapon_id", "@armor1_id", "@armor2_id",
-    "@armor3_id", "@armor4_id", "@maxhp_plus", "@maxmp_plus", "@atk_plus",
-    "@def_plus", "@spi_plus", "@agi_plus",
+    "@hp", "@mp", "@sp", "@tp", "@param_plus", "@equips", "@skills", "@states",
+    "@state_turns", "@state_steps", "@states_turn", "@weapon_id", "@armor1_id",
+    "@armor2_id", "@armor3_id", "@armor4_id", "@maxhp_plus", "@maxmp_plus",
+    "@maxsp_plus", "@atk_plus", "@def_plus", "@spi_plus", "@agi_plus",
+    "@str_plus", "@dex_plus", "@int_plus",
 ];
 
 pub fn summary(save: &SaveFile, data: Option<&GameData>) -> Summary {
@@ -44,6 +45,7 @@ pub fn summary(save: &SaveFile, data: Option<&GameData>) -> Summary {
         data_missing: data.map(|d| d.missing.clone()).unwrap_or_default(),
 
         has_playtime: save.playtime_frames().is_some(),
+        frame_rate: save.engine.frame_rate(),
         playtime_seconds: save.playtime_seconds().unwrap_or(0),
         playtime_text: format_playtime(save.playtime_seconds().unwrap_or(0)),
         save_count: save.system().and_then(|s| save.heap.ivar_int(s, "@save_count")),
@@ -222,10 +224,12 @@ pub fn actor_view(save: &SaveFile, data: Option<&GameData>, actor_id: i64) -> Op
             .is_some(),
 
         hp: heap.ivar_int(actor, "@hp"),
-        mp: heap.ivar_int(actor, "@mp"),
+        mp: heap.ivar_int(actor, save.engine.mp_ivar()),
         tp: heap.ivar_number(actor, "@tp"),
         max_hp: save.actor_param_base(actor, 0, data).map(|b| b + bonus(0)),
         max_mp: save.actor_param_base(actor, 1, data).map(|b| b + bonus(1)),
+        mp_label: save.engine.mp_label().to_owned(),
+        mp_ivar: save.engine.mp_ivar().to_owned(),
 
         params,
         equips,

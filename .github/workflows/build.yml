@@ -1,0 +1,149 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes an in-flight run pointless, except for
+# tags, whose runs publish a release and must be left alone.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Trunk builds the WebAssembly front end. Bump this when you bump it locally.
+  TRUNK_VERSION: v0.21.14
+
+jobs:
+  test:
+    name: Tests and lints
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            file
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Ruby is present on GitHub's runners, so the tests that hand our output
+      # to a real Ruby for checking will run rather than skip.
+      - run: cargo test --workspace
+
+  bundle:
+    name: ${{ matrix.name }} installers
+    needs: test
+    # Pull requests get the tests; building installers for them is wasted time.
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 is the oldest supported image, and the resulting binaries need
+          # only the glibc that ships with it — build on a newer one and older
+          # distributions can no longer run the result.
+          - os: ubuntu-22.04
+            name: Linux
+            bundles: deb,appimage
+            trunk_asset: trunk-x86_64-unknown-linux-gnu.tar.gz
+          - os: windows-latest
+            name: Windows
+            bundles: nsis,msi
+            trunk_asset: trunk-x86_64-pc-windows-msvc.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            file \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-bundle
+
+      - name: Install Trunk
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/${{ matrix.trunk_asset }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            curl -fsSL "$url" -o trunk.zip
+            unzip -o trunk.zip -d "$HOME/.cargo/bin"
+          else
+            curl -fsSL "$url" | tar -xz -C "$HOME/.cargo/bin"
+          fi
+          trunk --version
+
+      # If the AppImage step ever fails with "failed to run linuxdeploy", add
+      #   env:
+      #     NO_STRIP: true
+      # to this job, or drop `appimage` from the bundle list above. linuxdeploy
+      # carries its own `strip`, which chokes on libraries built with newer
+      # relocation formats.
+      - name: Build installers
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --bundles ${{ matrix.bundles }}
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: rpgmaker-save-editor-${{ matrix.name }}
+          uploadUpdaterJson: false
+
+      # Pushing a tag such as v0.1.1 publishes a draft release with the
+      # installers attached; review it on the Releases page, then publish.
+      - name: Build installers and draft the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --bundles ${{ matrix.bundles }}
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: rpgmaker-save-editor-${{ matrix.name }}
+          tagName: ${{ github.ref_name }}
+          releaseName: RPG Maker Save Editor ${{ github.ref_name }}
+          releaseBody: |
+            Editor for RPG Maker VX, VX Ace and XP save files.
+
+            - **Windows**: `.exe` installer, or the `.msi` package.
+            - **Linux**: `.deb` for Debian and Ubuntu, or the portable `.AppImage`.
+          releaseDraft: true
+          uploadUpdaterJson: false

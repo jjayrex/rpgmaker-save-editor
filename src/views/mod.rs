@@ -47,6 +47,16 @@ pub fn text_field(
     }
 }
 
+/// A labelled row whose label is decided at runtime.
+pub fn field_row_owned(label: String, control: impl IntoView) -> impl IntoView {
+    view! {
+        <label class="row">
+            <span class="row-label">{label}</span>
+            <span class="row-control">{control}</span>
+        </label>
+    }
+}
+
 /// A labelled row inside a card.
 pub fn field_row(label: &'static str, control: impl IntoView) -> impl IntoView {
     view! {

@@ -216,25 +216,6 @@ fn ruby_loads_an_edited_save() {
     }
 }
 
-#[test]
-fn an_xp_save_is_turned_away_with_a_clear_reason() {
-    let path = std::env::temp_dir().join("rpgsave-not-supported.rxdata");
-    std::fs::copy(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ace_save.rvdata2"),
-        &path,
-    )
-    .unwrap();
-
-    let Err(error) = SaveFile::open(&path) else {
-        panic!("XP saves are not supported yet and should be refused");
-    };
-    assert!(
-        error.to_string().contains("RPG Maker XP"),
-        "the message should name the engine, got: {error}"
-    );
-    let _ = std::fs::remove_file(&path);
-}
-
 /// Opening a file and saving it without touching anything must reproduce it
 /// byte for byte. This covers the whole write path, including the header
 /// refresh, which has no business rewriting fields nobody edited.
@@ -247,6 +228,8 @@ fn saving_an_untouched_file_changes_nothing() {
         "vx_project/Save1.rvdata",
         "mirrored_header.rvdata2",
         "unknown_playtime.rvdata2",
+        "xp_save.rxdata",
+        "xp_project/Save1.rxdata",
     ] {
         let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/{}"), name);
         let original = std::fs::read(&path).expect("read");

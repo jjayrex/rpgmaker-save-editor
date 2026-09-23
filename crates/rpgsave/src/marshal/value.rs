@@ -68,8 +68,12 @@ pub struct Node {
 
 #[derive(Clone, Debug)]
 pub enum NodeKind {
-    /// `f`
-    Float(f64),
+    /// `f` — the value, plus the exact text it was read from.
+    ///
+    /// Every Ruby version has formatted floats differently (1.8 used C's `%g`,
+    /// 1.9 switched to shortest-round-trip), so replaying the original text is
+    /// the only way to reproduce a file from any engine byte for byte.
+    Float { value: f64, source: Option<Box<str>> },
     /// `"` — a Ruby String. Kept as raw bytes: RGSS1/2 saves are not UTF-8.
     Str(Vec<u8>),
     /// `[`
@@ -111,7 +115,7 @@ impl NodeKind {
     /// Short tag used by the UI to pick an editor for this node.
     pub fn tag(&self) -> &'static str {
         match self {
-            NodeKind::Float(_) => "float",
+            NodeKind::Float { .. } => "float",
             NodeKind::Str(_) => "string",
             NodeKind::Array(_) => "array",
             NodeKind::Hash { .. } => "hash",
@@ -216,7 +220,13 @@ impl Heap {
     }
 
     pub fn new_float(&mut self, value: f64) -> Value {
-        Value::Ref(self.alloc_kind(NodeKind::Float(value)))
+        Value::Ref(self.alloc_kind(NodeKind::Float { value, source: None }))
+    }
+
+    /// A float read from a stream, remembering how it was written.
+    pub fn new_float_from(&mut self, value: f64, source: &str) -> Value {
+        let source = Some(source.into());
+        Value::Ref(self.alloc_kind(NodeKind::Float { value, source }))
     }
 
     pub fn new_array(&mut self, items: Vec<Value>) -> Value {
@@ -274,7 +284,7 @@ impl Heap {
         match v {
             Value::Int(i) => Some(i as f64),
             Value::Ref(id) => match self.node(id).kind {
-                NodeKind::Float(f) => Some(f),
+                NodeKind::Float { value, .. } => Some(value),
                 _ => None,
             },
             _ => None,
@@ -361,7 +371,10 @@ impl Heap {
                     return true;
                 }
                 match (&self.node(x).kind, &self.node(y).kind) {
-                    (NodeKind::Float(a), NodeKind::Float(b)) => a == b,
+                    (
+                        NodeKind::Float { value: a, .. },
+                        NodeKind::Float { value: b, .. },
+                    ) => a == b,
                     (NodeKind::Str(a), NodeKind::Str(b)) => a == b,
                     (NodeKind::Array(a), NodeKind::Array(b)) => {
                         a.len() == b.len()

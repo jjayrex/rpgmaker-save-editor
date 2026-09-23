@@ -174,9 +174,14 @@ impl<'h> Writer<'h> {
         self.remember(id);
 
         match &node.kind {
-            NodeKind::Float(f) => {
+            NodeKind::Float { value, source } => {
                 self.byte(b'f');
-                self.bytes(ruby_float_string(*f).as_bytes());
+                // Write it back exactly as it was read, when that still says
+                // the same number; otherwise format it ourselves.
+                match source {
+                    Some(text) if parses_back_to(text, *value) => self.bytes(text.as_bytes()),
+                    _ => self.bytes(ruby_float_string(*value).as_bytes()),
+                }
             }
             NodeKind::Str(bytes) => {
                 self.byte(b'"');
@@ -261,6 +266,16 @@ fn int_to_words(mut n: u64) -> Vec<u16> {
         words.push(0);
     }
     words
+}
+
+/// Whether `text` is a faithful spelling of `value`.
+fn parses_back_to(text: &str, value: f64) -> bool {
+    match text {
+        "inf" => value == f64::INFINITY,
+        "-inf" => value == f64::NEG_INFINITY,
+        "nan" => value.is_nan(),
+        _ => text.parse::<f64>().is_ok_and(|parsed| parsed.to_bits() == value.to_bits()),
+    }
 }
 
 /// Ruby's textual float encoding.

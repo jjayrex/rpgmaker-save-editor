@@ -8,9 +8,6 @@ use crate::marshal::{self, Heap, MarshalError, NodeKind, Value};
 
 use super::engine::{Engine, UnsupportedReason};
 
-/// Frames per second RGSS2 and RGSS3 run at; play time is stored as frames.
-pub const FRAME_RATE: i64 = 60;
-
 /// Where VX Ace keeps the play-time frame counter. `@frames_on_save` is the
 /// name RGSS3's own `Game_System#on_before_save` uses; the rest cover scripts
 /// and engines that named it differently.
@@ -118,11 +115,6 @@ pub struct SaveFile {
 
 impl SaveFile {
     pub fn open(path: &Path) -> Result<SaveFile, OpenError> {
-        // XP saves decode perfectly well as Marshal, so say plainly that the
-        // engine is not supported rather than half-reading one.
-        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("rxdata")) {
-            return Err(OpenError::Unsupported(UnsupportedReason::RpgMakerXp));
-        }
         let bytes = std::fs::read(path)?;
         let mut file = SaveFile::from_bytes(&bytes, Engine::from_path(path))?;
         file.path = path.to_path_buf();
@@ -153,10 +145,11 @@ impl SaveFile {
                 }
                 (header, contents)
             }
-            Engine::Vx => (Some(0), None),
+            Engine::Vx | Engine::Xp => (Some(0), None),
         };
+        // VX and XP dump `Graphics.frame_count` as a document of its own.
         let frame_doc = match engine {
-            Engine::Vx => documents.iter().position(|d| matches!(d, Value::Int(_))),
+            Engine::Vx | Engine::Xp => documents.iter().position(|d| matches!(d, Value::Int(_))),
             Engine::VxAce => None,
         };
 
@@ -281,7 +274,7 @@ impl SaveFile {
 
     pub fn playtime_frames(&self) -> Option<i64> {
         match self.engine {
-            Engine::Vx => self.frame_doc.and_then(|i| self.documents[i].as_int()),
+            Engine::Vx | Engine::Xp => self.frame_doc.and_then(|i| self.documents[i].as_int()),
             Engine::VxAce => {
                 let system = self.system()?;
                 PLAYTIME_IVARS.iter().find_map(|n| self.heap.ivar_int(system, n))
@@ -292,7 +285,7 @@ impl SaveFile {
     pub fn set_playtime_frames(&mut self, frames: i64) -> bool {
         let frames = frames.max(0);
         match self.engine {
-            Engine::Vx => {
+            Engine::Vx | Engine::Xp => {
                 let Some(i) = self.frame_doc else { return false };
                 self.documents[i] = Value::Int(frames);
             }
@@ -319,7 +312,12 @@ impl SaveFile {
     }
 
     pub fn playtime_seconds(&self) -> Option<i64> {
-        self.playtime_frames().map(|f| f / FRAME_RATE)
+        self.playtime_frames().map(|f| f / self.engine.frame_rate())
+    }
+
+    /// Sets play time in seconds, converting at the engine's frame rate.
+    pub fn set_playtime_seconds(&mut self, seconds: i64) -> bool {
+        self.set_playtime_frames(seconds.max(0) * self.engine.frame_rate())
     }
 
     // ---- party ------------------------------------------------------------
@@ -347,19 +345,45 @@ impl SaveFile {
     }
 
     /// Actor ids in the party, in order.
+    ///
+    /// VX and VX Ace store ids; XP stores the `Game_Actor` objects themselves.
     pub fn party_member_ids(&self) -> Vec<i64> {
         self.party()
             .and_then(|p| self.heap.ivar(p, "@actors"))
             .and_then(|a| self.heap.array(a))
-            .map(|items| items.iter().filter_map(|v| v.as_int()).collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_int().or_else(|| self.heap.ivar_int(*v, "@actor_id")))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
+    /// Whether this actor could join the party.
+    ///
+    /// On XP the party holds actor objects, so only actors the game has already
+    /// created can be put in it.
+    pub fn party_can_include(&self, actor_id: i64) -> bool {
+        !self.engine.party_holds_objects() || self.actor(actor_id).is_some()
+    }
+
     pub fn set_party_member_ids(&mut self, ids: &[i64]) -> bool {
+        let members: Vec<Value> = if self.engine.party_holds_objects() {
+            let mut resolved = Vec::with_capacity(ids.len());
+            for id in ids {
+                let Some(actor) = self.actor(*id) else { return false };
+                resolved.push(actor);
+            }
+            resolved
+        } else {
+            ids.iter().map(|id| Value::Int(*id)).collect()
+        };
+
         self.update_roots("Game_Party", |heap, party| {
             let Some(actors) = heap.ivar(party, "@actors") else { return false };
             let Some(list) = heap.array_mut(actors) else { return false };
-            *list = ids.iter().map(|id| Value::Int(*id)).collect();
+            *list = members.clone();
             true
         })
     }
@@ -471,11 +495,7 @@ impl SaveFile {
         let engine = self.engine;
         self.update_roots("Game_SelfSwitches", |heap, root| {
             let Some(data) = heap.ivar(root, "@data") else { return false };
-            let letter_value = match engine {
-                // RGSS3 runs Ruby 1.9, where every string carries its encoding.
-                Engine::VxAce => heap.new_utf8_str(letter),
-                Engine::Vx => heap.new_str(letter),
-            };
+            let letter_value = new_engine_string(heap, engine, letter);
             let key = heap.new_array(vec![Value::Int(map), Value::Int(event), letter_value]);
             heap.hash_set(data, key, Value::Bool(on))
         })
@@ -513,22 +533,47 @@ impl SaveFile {
         self.actors().into_iter().find(|(a, _)| *a == id).map(|(_, v)| v)
     }
 
-    /// The actor with this id in every top-level `Game_Actors` copy.
+    /// Every stored copy of the actor with this id.
+    ///
+    /// There is usually one, in `Game_Actors`. XP also keeps the party members
+    /// themselves inside `Game_Party`, and because each is written as its own
+    /// Marshal document they come back as separate objects — so a party member
+    /// exists twice and both have to be kept in step.
     pub fn actor_copies(&self, id: i64) -> Vec<Value> {
-        self.roots("Game_Actors")
-            .into_iter()
-            .filter_map(|root| {
-                let data = self.heap.ivar(root, "@data")?;
-                let items = self.heap.array(data)?;
-                items.iter().enumerate().find_map(|(index, actor)| {
-                    if actor.is_nil() {
-                        return None;
-                    }
-                    let actor_id = self.heap.ivar_int(*actor, "@actor_id").unwrap_or(index as i64);
-                    (actor_id == id).then_some(*actor)
-                })
-            })
-            .collect()
+        let matches = |actor: &Value, index: usize| {
+            !actor.is_nil()
+                && self.heap.ivar_int(*actor, "@actor_id").unwrap_or(index as i64) == id
+        };
+
+        let mut copies: Vec<Value> = Vec::new();
+        let mut push = |value: Value| {
+            if !copies.contains(&value) {
+                copies.push(value);
+            }
+        };
+
+        for root in self.roots("Game_Actors") {
+            let Some(items) = self.heap.ivar(root, "@data").and_then(|d| self.heap.array(d)) else {
+                continue;
+            };
+            if let Some(actor) = items.iter().enumerate().find(|(i, a)| matches(a, *i)) {
+                push(*actor.1);
+            }
+        }
+
+        for party in self.roots("Game_Party") {
+            let Some(members) = self.heap.ivar(party, "@actors").and_then(|a| self.heap.array(a))
+            else {
+                continue;
+            };
+            for (index, member) in members.iter().enumerate() {
+                // Only the engines that store objects here; ids are not copies.
+                if member.as_ref().is_some() && matches(member, index) {
+                    push(*member);
+                }
+            }
+        }
+        copies
     }
 
     /// Runs a change against every stored copy of one actor.
@@ -569,17 +614,17 @@ impl SaveFile {
         self.update_roots("Game_Player", |heap, player| {
             heap.set_ivar(player, "@x", Value::Int(x));
             heap.set_ivar(player, "@y", Value::Int(y));
-            match engine {
+            match engine.tile_subdivisions() {
                 // RGSS3 tracks the position within a tile as a Float.
-                Engine::VxAce => {
+                None => {
                     let (real_x, real_y) = (heap.new_float(x as f64), heap.new_float(y as f64));
                     heap.set_ivar(player, "@real_x", real_x);
                     heap.set_ivar(player, "@real_y", real_y);
                 }
-                // RGSS2 stores it in 1/256th of a tile.
-                Engine::Vx => {
-                    heap.set_ivar(player, "@real_x", Value::Int(x * 256));
-                    heap.set_ivar(player, "@real_y", Value::Int(y * 256));
+                // The older engines count in fractions of a tile.
+                Some(scale) => {
+                    heap.set_ivar(player, "@real_x", Value::Int(x * scale));
+                    heap.set_ivar(player, "@real_y", Value::Int(y * scale));
                 }
             }
             true
@@ -615,7 +660,7 @@ impl SaveFile {
                 }
                 self.refresh_playtime_text(header);
             }
-            Engine::Vx => {
+            Engine::Vx | Engine::Xp => {
                 // The first document is the characters array itself.
                 if self.heap.array(header).is_some() {
                     let rebuilt = self.build_characters(self.header_face_limit(header));
@@ -644,7 +689,7 @@ impl SaveFile {
             // Replacing the bytes in place keeps the string's encoding.
             Some(existing) if self.heap.set_string(existing, &text) => {}
             Some(_) | None => {
-                let value = self.heap.new_utf8_str(&text);
+                let value = new_engine_string(&mut self.heap, self.engine, &text);
                 self.heap.hash_set(header, key, value);
             }
         }
@@ -759,7 +804,7 @@ fn has_symbol_key(heap: &Heap, entries: &[(Value, Value)], name: &str) -> bool {
 /// A hash is the VX Ace save contents if it is keyed by the symbols the engine
 /// uses. Two matches is enough to be sure without demanding an exact set,
 /// which scripts sometimes extend.
-fn looks_like_contents(heap: &Heap, entries: &[(Value, Value)]) -> bool {
+pub(crate) fn looks_like_contents(heap: &Heap, entries: &[(Value, Value)]) -> bool {
     const KEYS: [&str; 6] = ["system", "party", "actors", "switches", "variables", "map"];
     let hits = entries
         .iter()
@@ -769,6 +814,15 @@ fn looks_like_contents(heap: &Heap, entries: &[(Value, Value)]) -> bool {
         })
         .count();
     hits >= 2
+}
+
+/// Builds a Ruby String the way this engine's Ruby would have.
+pub fn new_engine_string(heap: &mut Heap, engine: Engine, text: &str) -> Value {
+    if engine.strings_carry_encoding() {
+        heap.new_utf8_str(text)
+    } else {
+        heap.new_str(text)
+    }
 }
 
 pub fn format_playtime(seconds: i64) -> String {
@@ -847,7 +901,7 @@ pub fn preview(heap: &Heap, value: Value) -> String {
         Value::Int(i) => i.to_string(),
         Value::Sym(s) => format!(":{}", heap.sym(s)),
         Value::Ref(id) => match heap.kind(id) {
-            NodeKind::Float(f) => format!("{f}"),
+            NodeKind::Float { value, .. } => format!("{value}"),
             NodeKind::Str(bytes) => {
                 let text = crate::marshal::decode_ruby_string(bytes);
                 if text.chars().count() > 60 {

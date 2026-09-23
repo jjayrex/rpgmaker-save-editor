@@ -79,7 +79,7 @@ pub fn scalar_of(heap: &Heap, value: Value) -> Option<Scalar> {
         Value::Int(i) => Some(Scalar::Int(i)),
         Value::Sym(s) => Some(Scalar::Sym(heap.sym(s).to_owned())),
         Value::Ref(id) => match heap.kind(id) {
-            NodeKind::Float(f) => Some(Scalar::Float(*f)),
+            NodeKind::Float { value, .. } => Some(Scalar::Float(*value)),
             NodeKind::Str(bytes) => Some(Scalar::Str(rpgsave::marshal::decode_ruby_string(bytes))),
             _ => None,
         },
@@ -95,10 +95,7 @@ pub fn value_of(heap: &mut Heap, engine: Engine, scalar: &Scalar) -> Value {
         Scalar::Int(i) => Value::Int(*i),
         Scalar::Float(f) => heap.new_float(*f),
         Scalar::Sym(s) => heap.new_sym(s),
-        Scalar::Str(s) => match engine {
-            Engine::VxAce => heap.new_utf8_str(s),
-            Engine::Vx => heap.new_str(s),
-        },
+        Scalar::Str(s) => rpgsave::rpg::save::new_engine_string(heap, engine, s),
     }
 }
 

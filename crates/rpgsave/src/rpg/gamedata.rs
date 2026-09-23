@@ -27,7 +27,7 @@ pub struct Entry {
     pub etype_id: i64,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default)]
 pub struct ActorInfo {
     pub id: i64,
     pub name: String,
@@ -35,6 +35,8 @@ pub struct ActorInfo {
     pub class_id: i64,
     pub initial_level: i64,
     pub max_level: i64,
+    /// XP keeps each actor's stat curve here rather than on the class.
+    pub params: Option<Table>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -155,6 +157,17 @@ impl GameData {
                 data.currency = heap.ivar(value, "@currency_unit").and_then(|v| heap.string(v));
                 if let Some(terms) = heap.ivar(value, "@terms") {
                     data.equip_types = read_name_list(&heap, heap.ivar(terms, "@etypes"));
+                } else if let Some(words) = heap.ivar(value, "@words") {
+                    // XP: one named field per slot, and the currency term.
+                    data.equip_types = ["@weapon", "@armor1", "@armor2", "@armor3", "@armor4"]
+                        .iter()
+                        .map(|slot| {
+                            heap.ivar(words, slot).and_then(|v| heap.string(v)).unwrap_or_default()
+                        })
+                        .collect();
+                    if data.currency.is_none() {
+                        data.currency = heap.ivar(words, "@gold").and_then(|v| heap.string(v));
+                    }
                 }
                 data.loaded.push("System".to_owned());
             }
@@ -294,8 +307,17 @@ fn read_actors(heap: &Heap, value: Value) -> Vec<ActorInfo> {
                 .ivar_int(*v, "@max_level")
                 .or_else(|| heap.ivar_int(*v, "@final_level"))
                 .unwrap_or(99),
+            params: heap.ivar(*v, "@parameters").and_then(|p| read_table(heap, p)),
         })
         .collect()
+}
+
+/// Decodes an RGSS `Table` out of its `_dump` payload.
+fn read_table(heap: &Heap, value: Value) -> Option<Table> {
+    match heap.kind(value.as_ref()?) {
+        crate::marshal::NodeKind::UserDef { data, .. } => Table::parse(data),
+        _ => None,
+    }
 }
 
 fn read_classes(heap: &Heap, value: Value) -> Vec<ClassInfo> {
@@ -320,13 +342,7 @@ fn read_classes(heap: &Heap, value: Value) -> Vec<ClassInfo> {
             let params = heap
                 .ivar(*v, "@params")
                 .or_else(|| heap.ivar(*v, "@parameters"))
-                .and_then(|p| {
-                let id = p.as_ref()?;
-                match heap.kind(id) {
-                    crate::marshal::NodeKind::UserDef { data, .. } => Table::parse(data),
-                    _ => None,
-                }
-            });
+                .and_then(|p| read_table(heap, p));
             ClassInfo {
                 id: heap.ivar_int(*v, "@id").unwrap_or(i as i64),
                 name: heap.ivar(*v, "@name").and_then(|n| heap.string(n)).unwrap_or_default(),

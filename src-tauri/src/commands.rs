@@ -6,6 +6,7 @@ use tauri_plugin_dialog::DialogExt;
 use rpgsave::marshal::{NodeKind, Value};
 use rpgsave::rpg::actor::LevelChange;
 use rpgsave::rpg::save::ItemKind;
+use rpgsave::rpg::Engine;
 use rpgsave_protocol::*;
 
 use crate::state::{assign_scalar, to_path, Editor, SharedEditor};
@@ -21,15 +22,28 @@ fn kind_of(kind: &str) -> Reply<ItemKind> {
 
 #[tauri::command(async)]
 pub fn pick_save_file<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Reply<Option<String>> {
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("Open an RPG Maker save")
-        .add_filter("VX Ace save", &["rvdata2"])
-        .add_filter("VX save", &["rvdata"])
-        .add_filter("All files", &["*"])
-        .blocking_pick_file();
-    into_path(picked)
+    let mut dialog = app.dialog().file().set_title("Open an RPG Maker save");
+    for (name, extensions) in save_file_filters() {
+        dialog = dialog.add_filter(name, &extensions);
+    }
+    into_path(dialog.blocking_pick_file())
+}
+
+/// Filters for the open dialog: every supported save first, so the default
+/// view shows all of them, then one per engine.
+///
+/// Built from [`Engine::ALL`] so that adding an engine cannot leave its saves
+/// invisible in the file picker.
+fn save_file_filters() -> Vec<(String, Vec<&'static str>)> {
+    let every = Engine::ALL.iter().map(|e| e.save_extension()).collect();
+    let mut filters = vec![("RPG Maker save".to_owned(), every)];
+    filters.extend(
+        Engine::ALL
+            .into_iter()
+            .map(|engine| (format!("{} save", engine.label()), vec![engine.save_extension()])),
+    );
+    filters.push(("All files".to_owned(), vec!["*"]));
+    filters
 }
 
 #[tauri::command(async)]
@@ -137,9 +151,8 @@ pub fn set_steps(value: i64, editor: State<'_, SharedEditor>) -> Reply<Summary> 
 #[tauri::command]
 pub fn set_playtime(seconds: i64, editor: State<'_, SharedEditor>) -> Reply<Summary> {
     let mut editor = lock(&editor)?;
-    let frames = seconds.max(0) * rpgsave::rpg::save::FRAME_RATE;
     require(
-        editor.save_mut()?.set_playtime_frames(frames),
+        editor.save_mut()?.set_playtime_seconds(seconds),
         "This save does not record play time.",
     )?;
     Ok(views::summary(editor.save()?, editor.data()))
@@ -158,10 +171,17 @@ pub fn set_position(x: i64, y: i64, editor: State<'_, SharedEditor>) -> Reply<Su
 #[tauri::command]
 pub fn set_party(ids: Vec<i64>, editor: State<'_, SharedEditor>) -> Reply<Summary> {
     let mut editor = lock(&editor)?;
-    require(
-        editor.save_mut()?.set_party_member_ids(&ids),
-        "This save has no party list.",
-    )?;
+    let save = editor.save_mut()?;
+    // XP holds the actors themselves, so one that the game has never created
+    // cannot be put in the party.
+    if let Some(missing) = ids.iter().find(|id| !save.party_can_include(**id)) {
+        return Err(format!(
+            "Actor {missing} has not been created in this save yet. RPG Maker XP stores the \
+             party members themselves rather than their ids, so only actors the game has \
+             already made can join."
+        ));
+    }
+    require(save.set_party_member_ids(&ids), "This save has no party list.")?;
     Ok(views::summary(editor.save()?, editor.data()))
 }
 
@@ -620,5 +640,33 @@ fn require(ok: bool, message: &str) -> Reply<()> {
         Ok(())
     } else {
         Err(message.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every engine the editor supports has to be offered by the open dialog.
+    #[test]
+    fn the_open_dialog_offers_every_supported_engine() {
+        let filters = save_file_filters();
+        let combined = &filters[0].1;
+
+        for engine in Engine::ALL {
+            assert!(
+                combined.contains(&engine.save_extension()),
+                "{} saves are missing from the combined filter",
+                engine.label()
+            );
+            assert!(
+                filters.iter().any(|(name, extensions)| {
+                    name.contains(engine.label()) && extensions == &[engine.save_extension()]
+                }),
+                "{} has no filter of its own",
+                engine.label()
+            );
+        }
+        assert_eq!(filters.last().map(|(name, _)| name.as_str()), Some("All files"));
     }
 }

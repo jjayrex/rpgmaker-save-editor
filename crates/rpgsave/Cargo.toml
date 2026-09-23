@@ -1,6 +1,6 @@
 [package]
 name = "rpgsave"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Ruby Marshal (4.8) codec and RPG Maker XP/VX/VX Ace save-game model"
 

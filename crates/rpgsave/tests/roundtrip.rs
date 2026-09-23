@@ -63,6 +63,15 @@ fn ace_save_round_trips_byte_for_byte() {
 }
 
 #[test]
+fn xp_save_round_trips_byte_for_byte() {
+    let (heap, values) = assert_byte_identical("xp_save.rxdata");
+    assert_eq!(values.len(), 12, "XP saves are twelve documents in a row");
+    assert_eq!(values[1], Value::Int(3 * 3600 * 40), "frame count");
+    assert_eq!(heap.class_name(values[8]), Some("Game_Party"));
+    assert_eq!(heap.ivar_int(values[8], "@gold"), Some(12_345));
+}
+
+#[test]
 fn vx_save_round_trips_byte_for_byte() {
     let (heap, values) = assert_byte_identical("vx_save.rvdata");
     assert_eq!(values.len(), 14, "VX saves are fourteen documents in a row");
@@ -126,7 +135,7 @@ fn ruby_loads_what_we_write() {
         eprintln!("skipping: ruby is not installed");
         return;
     }
-    for name in ["ace_save.rvdata2", "vx_save.rvdata", "edge_cases.bin"] {
+    for name in ["ace_save.rvdata2", "vx_save.rvdata", "xp_save.rxdata", "edge_cases.bin"] {
         let (_, _, out) = reload(name);
         let rewritten = std::env::temp_dir().join(format!("rpgsave-rewritten-{name}"));
         std::fs::write(&rewritten, &out).expect("write");
@@ -177,4 +186,31 @@ fn floats_encode_exactly_as_ruby_does() {
         checked += 1;
     }
     assert!(checked >= 40, "the reference table should not be nearly empty");
+}
+
+/// Every Ruby has formatted floats differently — 1.8 used C's `%g`, so RGSS1
+/// writes `100` where RGSS3 writes `1e2`. Rather than encode each engine's
+/// rules, a float that was read and not changed is written back verbatim.
+#[test]
+fn floats_are_written_back_exactly_as_they_were_read() {
+    // `100` is what Ruby 1.8 wrote; a modern Ruby would spell it `1e2`.
+    let legacy = b"\x04\x08[\x07f\x08100f\x0c0.00001";
+    let mut heap = Heap::new();
+    let values = marshal::load(legacy, &mut heap).expect("load");
+
+    let items = heap.array(values).expect("array");
+    assert_eq!(heap.number(items[0]), Some(100.0));
+    assert_eq!(heap.number(items[1]), Some(0.00001));
+    assert_eq!(marshal::dump(values, &heap), legacy, "spelling preserved");
+
+    // A float the editor creates has no original spelling to keep, so it gets
+    // the modern one.
+    let fresh = heap.new_float(100.0);
+    let encoded = marshal::dump(fresh, &heap);
+    assert_eq!(&encoded[2..], b"f\x081e2");
+
+    // And a value that no longer matches its text is re-formatted.
+    let mut heap = Heap::new();
+    let reparsed = marshal::load(&encoded, &mut heap).expect("load");
+    assert_eq!(heap.number(reparsed), Some(100.0));
 }

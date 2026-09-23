@@ -6,7 +6,7 @@ use rpgsave_protocol::{ActorView as Actor, CatalogEntry, NamedId, Scalar};
 
 use crate::api;
 use crate::state::{ctx, group_digits, parse_int};
-use crate::views::{field_row, number_field, scalar_field, text_field};
+use crate::views::{field_row, field_row_owned, number_field, scalar_field, text_field};
 
 /// The database rows the pickers on this tab need.
 #[derive(Clone, Default, PartialEq)]
@@ -271,6 +271,7 @@ fn VitalsCard(actor: Actor, on_change: impl Fn(Result<Actor, String>) + Copy + '
     let id = actor.actor_id;
     let max_hp = actor.max_hp;
     let max_mp = actor.max_mp;
+    let mp_ivar = actor.mp_ivar.clone();
 
     view! {
         <section class="card">
@@ -283,10 +284,13 @@ fn VitalsCard(actor: Actor, on_change: impl Fn(Result<Actor, String>) + Copy + '
                     {max_hp.map(|m| view! { <span class="unit">{format!("/ {m}")}</span> })}
                 </span>
             }))}
-            {actor.mp.map(|mp| field_row("MP", view! {
+            {actor.mp.map(|mp| field_row_owned(actor.mp_label.clone(), view! {
                 <span class="input-group">
                     {number_field(mp, "num", move |v| {
-                        spawn_local(async move { on_change(api::set_actor_int(id, "@mp", v).await) });
+                        let ivar = mp_ivar.clone();
+                        spawn_local(async move {
+                            on_change(api::set_actor_int(id, &ivar, v).await)
+                        });
                     })}
                     {max_mp.map(|m| view! { <span class="unit">{format!("/ {m}")}</span> })}
                 </span>
@@ -303,7 +307,7 @@ fn VitalsCard(actor: Actor, on_change: impl Fn(Result<Actor, String>) + Copy + '
             </div>
             <Show when=move || max_hp.is_none()>
                 <p class="hint">
-                    "Maximum HP and MP are computed by the game from the class and equipment, so \
+                    "Maximum HP and MP are worked out by the game from the class and equipment, so \
                      they are not stored in the save. With the database loaded the editor can \
                      show them."
                 </p>

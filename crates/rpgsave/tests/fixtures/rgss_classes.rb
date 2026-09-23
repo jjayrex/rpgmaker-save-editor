@@ -371,3 +371,33 @@ module RPG
     end
   end
 end
+
+# ----------------------------------------------------------------- RGSS1 (XP)
+#
+# XP differs from VX in ways that matter to the editor: the party holds the
+# actor objects themselves, the secondary pool is SP, stat curves live on the
+# actor's database entry, and the screen is saved as its own document.
+#
+# Its classes share names with the VX ones above but hold different instance
+# variables, so XP objects are built the way Marshal itself builds them — the
+# class is allocated and the variables are set directly.
+
+module RPG
+  class System
+    # XP calls the database terms "words", with one field per equipment slot.
+    class Words; end
+  end
+  class Actor; end
+  class Class; end
+  class Weapon; end
+  class Armor; end
+  class Skill; end
+  class State; end
+end
+
+# Builds an object of `klass` carrying exactly these instance variables.
+def shaped(klass, ivars)
+  object = klass.allocate
+  ivars.each { |name, value| object.instance_variable_set("@#{name}", value) }
+  object
+end

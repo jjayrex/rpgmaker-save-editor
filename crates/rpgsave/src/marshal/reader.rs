@@ -172,7 +172,11 @@ impl<'a, 'h> Reader<'a, 'h> {
             }
             b'f' => {
                 let bytes = self.raw_bytes()?;
-                let id = self.heap.alloc_kind(NodeKind::Float(parse_ruby_float(&bytes)));
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let id = self.heap.alloc_kind(NodeKind::Float {
+                    value: parse_ruby_float(&bytes),
+                    source: Some(text.into()),
+                });
                 // Ruby gives floats a slot in the object table, and save files
                 // do link back to them.
                 self.register(id);
