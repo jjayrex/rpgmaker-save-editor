@@ -234,3 +234,25 @@ fn an_xp_save_is_turned_away_with_a_clear_reason() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// Opening a file and saving it without touching anything must reproduce it
+/// byte for byte. This covers the whole write path, including the header
+/// refresh, which has no business rewriting fields nobody edited.
+#[test]
+fn saving_an_untouched_file_changes_nothing() {
+    for name in [
+        "ace_save.rvdata2",
+        "vx_save.rvdata",
+        "ace_project/Save1.rvdata2",
+        "vx_project/Save1.rvdata",
+        "mirrored_header.rvdata2",
+        "unknown_playtime.rvdata2",
+    ] {
+        let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/{}"), name);
+        let original = std::fs::read(&path).expect("read");
+        let mut save = SaveFile::open(std::path::Path::new(&path)).expect("open");
+
+        assert_eq!(save.to_bytes(), original, "{name} changed when saved untouched");
+        assert!(!save.dirty, "{name}: nothing was edited");
+    }
+}

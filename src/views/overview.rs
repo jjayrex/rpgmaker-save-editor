@@ -67,7 +67,15 @@ fn PartyCard(summary: Summary) -> impl IntoView {
 
             {steps.map(|steps| field_row("Steps", number_field(steps, "num", set_steps)))}
 
-            <Show when=move || has_playtime>
+            <Show
+                when=move || has_playtime
+                fallback=|| view! {
+                    <p class="hint">
+                        "Play time is not stored anywhere this editor recognises in this save, so \
+                         it is left alone."
+                    </p>
+                }
+            >
                 <PlaytimeRow seconds=playtime/>
             </Show>
         </section>

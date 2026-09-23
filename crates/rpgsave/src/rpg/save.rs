@@ -11,6 +11,11 @@ use super::engine::{Engine, UnsupportedReason};
 /// Frames per second RGSS2 and RGSS3 run at; play time is stored as frames.
 pub const FRAME_RATE: i64 = 60;
 
+/// Where VX Ace keeps the play-time frame counter. `@frames_on_save` is the
+/// name RGSS3's own `Game_System#on_before_save` uses; the rest cover scripts
+/// and engines that named it differently.
+const PLAYTIME_IVARS: [&str; 4] = ["@frames_on_save", "@framecount", "@frame_count", "@playtime"];
+
 /// Hard limits the engines themselves enforce.
 pub const MAX_GOLD: i64 = 99_999_999;
 pub const MAX_ITEM_COUNT: i64 = 99;
@@ -105,6 +110,8 @@ pub struct SaveFile {
     contents_doc: Option<usize>,
     /// Index of the file-select header document.
     header_doc: Option<usize>,
+    /// Whether play time was changed, and so the header string needs rewriting.
+    playtime_edited: bool,
     /// VX: index of the bare `Graphics.frame_count` document.
     frame_doc: Option<usize>,
 }
@@ -163,11 +170,18 @@ impl SaveFile {
             size_bytes: bytes.len(),
             contents_doc,
             header_doc,
+            playtime_edited: false,
             frame_doc,
         };
         if file.root("Game_Party").is_none() {
             file.notes.push(
                 "No Game_Party object was found, so party and inventory editing is unavailable."
+                    .to_owned(),
+            );
+        } else if file.roots("Game_Party").len() > 1 {
+            file.notes.push(
+                "This game mirrors its whole state into the save header for the load screen. \
+                 Edits are written to every copy so the two stay in step."
                     .to_owned(),
             );
         }
@@ -270,9 +284,7 @@ impl SaveFile {
             Engine::Vx => self.frame_doc.and_then(|i| self.documents[i].as_int()),
             Engine::VxAce => {
                 let system = self.system()?;
-                ["@framecount", "@frame_count", "@playtime"]
-                    .iter()
-                    .find_map(|n| self.heap.ivar_int(system, n))
+                PLAYTIME_IVARS.iter().find_map(|n| self.heap.ivar_int(system, n))
             }
         }
     }
@@ -286,15 +298,22 @@ impl SaveFile {
             }
             Engine::VxAce => {
                 let Some(system) = self.system() else { return false };
-                let name = ["@framecount", "@frame_count", "@playtime"]
+                // Only ever write a field the save already has: inventing one
+                // would leave a value the engine never reads.
+                let Some(name) = PLAYTIME_IVARS
                     .into_iter()
                     .find(|n| self.heap.ivar(system, n).is_some())
-                    .unwrap_or("@framecount");
-                return self.update_roots("Game_System", |heap, system| {
+                else {
+                    return false;
+                };
+                let changed = self.update_roots("Game_System", |heap, system| {
                     heap.set_ivar(system, name, Value::Int(frames))
                 });
+                self.playtime_edited |= changed;
+                return changed;
             }
         }
+        self.playtime_edited = true;
         self.dirty = true;
         true
     }
@@ -578,39 +597,73 @@ impl SaveFile {
     /// edited party and play time.
     fn refresh_header(&mut self) {
         let index = self.header_doc.unwrap_or(0);
-        let Some(&first) = self.documents.get(index) else { return };
-        let characters = self.build_characters();
+        let Some(&header) = self.documents.get(index) else { return };
 
         match self.engine {
             Engine::VxAce => {
-                if self.heap.hash_entries(first).is_none() {
+                if self.heap.hash_entries(header).is_none() {
                     return;
                 }
                 let key = self.heap.new_sym("characters");
-                if self.heap.hash_get(first, key).is_some() {
-                    self.heap.hash_set(first, key, characters);
+                if let Some(existing) = self.heap.hash_get(header, key) {
+                    let rebuilt = self.build_characters(self.header_face_limit(existing));
+                    // Only touch it when the faces would actually change; a game
+                    // may store a shape here that this rebuild cannot reproduce.
+                    if !self.heap.value_eq(existing, rebuilt) {
+                        self.heap.hash_set(header, key, rebuilt);
+                    }
                 }
-                let key = self.heap.new_sym("playtime_s");
-                if let Some(existing) = self.heap.hash_get(first, key) {
-                    let text = format_playtime(self.playtime_seconds().unwrap_or(0));
-                    self.heap.set_string(existing, &text);
-                }
+                self.refresh_playtime_text(header);
             }
             Engine::Vx => {
                 // The first document is the characters array itself.
-                if self.heap.array(first).is_some() {
-                    self.documents[index] = characters;
+                if self.heap.array(header).is_some() {
+                    let rebuilt = self.build_characters(self.header_face_limit(header));
+                    if !self.heap.value_eq(header, rebuilt) {
+                        self.documents[index] = rebuilt;
+                    }
                 }
             }
         }
     }
 
+    /// Rewrites the header's play-time string, but only when play time was
+    /// actually edited and is actually known.
+    ///
+    /// The load screen reads this string rather than recomputing it, so writing
+    /// a value derived from a field we failed to find would leave the game
+    /// showing a play time it never had.
+    fn refresh_playtime_text(&mut self, header: Value) {
+        if !self.playtime_edited {
+            return;
+        }
+        let Some(seconds) = self.playtime_seconds() else { return };
+        let key = self.heap.new_sym("playtime_s");
+        let text = format_playtime(seconds);
+        match self.heap.hash_get(header, key) {
+            // Replacing the bytes in place keeps the string's encoding.
+            Some(existing) if self.heap.set_string(existing, &text) => {}
+            Some(_) | None => {
+                let value = self.heap.new_utf8_str(&text);
+                self.heap.hash_set(header, key, value);
+            }
+        }
+    }
+
+    /// How many faces the load screen shows.
+    ///
+    /// Both engines default to the four battle members, but a game whose
+    /// scripts show more already says so in the header it wrote.
+    fn header_face_limit(&self, existing: Value) -> usize {
+        self.heap.array(existing).map(<[Value]>::len).unwrap_or(4).max(4)
+    }
+
     /// `[[character_name, character_index], ...]` for the battle members, the
     /// shape both engines store in the save header.
-    fn build_characters(&mut self) -> Value {
+    fn build_characters(&mut self, limit: usize) -> Value {
         let ids = self.party_member_ids();
         let mut rows = Vec::new();
-        for id in ids.into_iter().take(4) {
+        for id in ids.into_iter().take(limit) {
             let Some(actor) = self.actor(id) else { continue };
             let name = self
                 .heap
@@ -653,6 +706,7 @@ impl SaveFile {
 
         self.path = path.to_path_buf();
         self.dirty = false;
+        self.playtime_edited = false;
         Ok(backup)
     }
 

@@ -112,7 +112,8 @@ class Game_System
     @save_count = 3
     @version_id = 0
     if ace
-      @framecount = 91_235          # 25 min 20 s at 60 fps
+      # The name RGSS3's own Game_System#on_before_save writes.
+      @frames_on_save = 91_235      # 25 min 20 s at 60 fps
       @bgm_on_save = RPG::BGM.new(gen("Town1", binary), 100, 100)
       @bgs_on_save = nil
       @windowskin_name = gen("Window", binary)

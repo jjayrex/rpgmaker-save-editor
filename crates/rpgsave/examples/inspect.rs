@@ -5,7 +5,6 @@
 
 use std::path::Path;
 
-use rpgsave::marshal;
 use rpgsave::rpg::{format_playtime, save::ItemKind, GameData, SaveFile};
 
 fn main() {
@@ -24,7 +23,7 @@ fn main() {
 
 fn inspect(path: &Path) -> Result<(), String> {
     let original = std::fs::read(path).map_err(|e| e.to_string())?;
-    let save = SaveFile::open(path).map_err(|e| e.to_string())?;
+    let mut save = SaveFile::open(path).map_err(|e| e.to_string())?;
 
     println!("=== {} ===", path.display());
     println!(
@@ -82,8 +81,9 @@ fn inspect(path: &Path) -> Result<(), String> {
         );
     }
 
-    // The important part: what we would write back has to match what we read.
-    let rewritten = marshal::dump_stream(&save.documents, &save.heap);
+    // The important part: saving a file nobody edited has to reproduce it
+    // exactly. This goes through the whole write path, header refresh included.
+    let rewritten = save.to_bytes();
     if rewritten == original {
         println!("round trip    byte-identical ✓");
     } else {

@@ -186,3 +186,17 @@ File.open("mirrored_header.rvdata2", "wb") do |f|
   Marshal.dump(contents, f)
 end
 puts "wrote mirrored_header.rvdata2 (#{File.size('mirrored_header.rvdata2')} bytes)"
+
+# A game that keeps its play-time counter under a name this editor does not
+# know. The header still carries the string the load screen shows, and nothing
+# the editor does to an unrelated field may disturb it.
+odd = build_state(true, false)
+system = odd[:system]
+frames = system.instance_variable_get(:@frames_on_save)
+system.remove_instance_variable(:@frames_on_save)
+system.instance_variable_set(:@clock_frames, frames)
+File.open("unknown_playtime.rvdata2", "wb") do |f|
+  Marshal.dump({ characters: [["Actor1", 0], ["Actor1", 1]], playtime_s: "03:11:07" }, f)
+  Marshal.dump(odd, f)
+end
+puts "wrote unknown_playtime.rvdata2 (#{File.size('unknown_playtime.rvdata2')} bytes)"
