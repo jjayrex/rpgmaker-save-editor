@@ -169,6 +169,10 @@ fn writing_makes_a_backup_and_replaces_the_file() {
 }
 
 /// Ruby must be able to load a save we edited, not just our own reader.
+///
+/// The checking script lives in a file rather than in `ruby -e`, because
+/// `require_relative` has nothing to be relative to in `-e` code on older
+/// Rubies — which passes locally and fails on a CI runner.
 #[test]
 fn ruby_loads_an_edited_save() {
     let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -176,7 +180,8 @@ fn ruby_loads_an_edited_save() {
         eprintln!("skipping: ruby is not installed");
         return;
     }
-    for name in ["ace_save.rvdata2", "vx_save.rvdata"] {
+
+    for name in ["ace_save.rvdata2", "vx_save.rvdata", "xp_save.rxdata"] {
         let mut save = open(name);
         save.set_gold(54_321);
         save.set_switch(7, true);
@@ -185,32 +190,19 @@ fn ruby_loads_an_edited_save() {
         std::fs::write(&out, save.to_bytes()).unwrap();
 
         let result = std::process::Command::new("ruby")
-            .arg("-e")
-            .arg(
-                r#"
-                require_relative "rgss_classes"
-                docs = []
-                File.open(ARGV[0], "rb") { |f| docs << Marshal.load(f) until f.eof? }
-                party = docs.flat_map { |d| d.is_a?(Hash) ? d.values : [d] }
-                            .find { |o| o.is_a?(Game_Party) }
-                gold = party.instance_variable_get(:@gold)
-                items = party.instance_variable_get(:@items)
-                switches = docs.flat_map { |d| d.is_a?(Hash) ? d.values : [d] }
-                               .find { |o| o.is_a?(Game_Switches) }
-                               .instance_variable_get(:@data)
-                puts "gold=#{gold} item3=#{items[3]} switch7=#{switches[7]}"
-                "#,
-            )
+            .arg("check_edits.rb")
             .arg(&out)
             .current_dir(fixtures)
             .output()
             .expect("run ruby");
         let stdout = String::from_utf8_lossy(&result.stdout);
+
         assert_eq!(
             stdout.trim(),
             "gold=54321 item3=12 switch7=true",
-            "{name}: ruby read back {stdout}{}",
-            String::from_utf8_lossy(&result.stderr)
+            "{name}: ruby read back something else\n  status: {}\n  stdout: {stdout}\n  stderr: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stderr),
         );
         std::fs::remove_file(&out).ok();
     }
