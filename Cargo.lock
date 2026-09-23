@@ -3264,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "rpgmaker-save-editor"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "rpgsave",
  "rpgsave-protocol",
@@ -3277,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "rpgmaker-save-editor-ui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

@@ -268,11 +268,17 @@ pub fn VariablesView() -> impl IntoView {
 
 #[component]
 fn Pager(offset: RwSignal<usize>, matched: Signal<usize>, total: Signal<usize>) -> impl IntoView {
+    // Comparisons are kept out of the markup on purpose. In an unbraced
+    // attribute value a `>` closes the tag, so `a >= b` silently ends the
+    // element and the rest of the line is rendered as text.
+    let at_start = Memo::new(move |_| offset.get() == 0);
+    let at_end = Memo::new(move |_| offset.get() + PAGE_SIZE >= matched.get());
+
     view! {
         <div class="pager">
             <button
                 class="btn tiny"
-                disabled=move || offset.get() == 0
+                disabled=move || at_start.get()
                 on:click=move |_| offset.update(|o| *o = o.saturating_sub(PAGE_SIZE))
             >
                 "Previous"
@@ -290,7 +296,7 @@ fn Pager(offset: RwSignal<usize>, matched: Signal<usize>, total: Signal<usize>) 
             </span>
             <button
                 class="btn tiny"
-                disabled=move || offset.get() + PAGE_SIZE >= matched.get()
+                disabled=move || at_end.get()
                 on:click=move |_| offset.update(|o| *o += PAGE_SIZE)
             >
                 "Next"

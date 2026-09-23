@@ -33,6 +33,11 @@ member exists twice in the file. Edits are applied to every copy.
 Opening a save also accepts a path on the command line
 (`rpgmaker-save-editor Save1.rvdata2`) or a file dropped onto the window.
 
+On Linux with the proprietary NVIDIA driver, WebKitGTK's DMA-BUF renderer cannot
+share buffers with it and the window comes up blank. The editor detects that
+driver at startup and turns the renderer off; setting
+`WEBKIT_DISABLE_DMABUF_RENDERER` yourself overrides the decision either way.
+
 ## Building
 
 Needs the Rust toolchain, the `wasm32-unknown-unknown` target, and

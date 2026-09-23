@@ -40,6 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
 
@@ -48,6 +49,30 @@ jobs:
       # Ruby is present on GitHub's runners, so the tests that hand our output
       # to a real Ruby for checking will run rather than skip.
       - run: cargo test --workspace
+
+      - name: Install Trunk
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.cargo/bin"
+
+      - name: Build the interface
+        run: trunk build
+
+      # A `>` in an unbraced attribute value ends the tag early in the `view!`
+      # macro: the rest of the element becomes a text node, so a button turns
+      # into its own source code and stops working. It compiles without a
+      # murmur, but the leaked markup is a string in the bundle.
+      - name: Check the markup compiled rather than leaking as text
+        shell: bash
+        run: |
+          leaked=$(grep -aoE 'on:(click|change|input|submit)=.{0,60}' dist/*.wasm || true)
+          if [ -n "$leaked" ]; then
+            echo "::error::Markup leaked into the interface as text: $leaked"
+            echo "Put the comparison in a memo, or brace the attribute value."
+            exit 1
+          fi
 
   bundle:
     name: ${{ matrix.name }} installers
