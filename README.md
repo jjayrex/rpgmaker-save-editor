@@ -63,7 +63,10 @@ demand from the Actions tab:
 
 - **Tests and lints** — `cargo clippy -D warnings` and the test suite. Pull
   requests stop here.
-- **Installers** — Windows (`.exe`, `.msi`) and Linux (`.deb`, `.AppImage`),
-  attached to the run as artifacts. Linux builds on Ubuntu 22.04, so the result
-  runs on that release and anything newer.
-- 
+- **Installers** — Windows (`.exe`, `.msi`) and Linux (`.deb`), attached to the
+  run as artifacts. Linux builds on Ubuntu 22.04, so the result runs on that
+  release and anything newer.
+- **Portable builds** — the bare executable for each platform, for running
+  without installing anything. Everything the app needs is compiled in except
+  the system webview: WebView2 on Windows (part of Windows 10 and 11), and
+  WebKitGTK on Linux (`webkit2gtk-4.1`, which your distribution provides).

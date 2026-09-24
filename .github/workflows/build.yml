@@ -88,14 +88,20 @@ jobs:
           # 22.04 is the oldest supported image, and the resulting binaries need
           # only the glibc that ships with it — build on a newer one and older
           # distributions can no longer run the result.
+          # No AppImage: it bundles this runner's WebKitGTK, and an older
+          # WebKit cannot initialise EGL against a newer host's drivers —
+          # the window comes up grey. The portable tarball below uses the
+          # host's own WebKit instead, which works everywhere it is installed.
           - os: ubuntu-22.04
             name: Linux
-            bundles: deb,appimage
+            bundles: deb
             trunk_asset: trunk-x86_64-unknown-linux-gnu.tar.gz
+            portable_artifact: linux-x86_64-portable
           - os: windows-latest
             name: Windows
             bundles: nsis,msi
             trunk_asset: trunk-x86_64-pc-windows-msvc.zip
+            portable_artifact: windows-x86_64-portable
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -135,12 +141,6 @@ jobs:
           fi
           trunk --version
 
-      # If the AppImage step ever fails with "failed to run linuxdeploy", add
-      #   env:
-      #     NO_STRIP: true
-      # to this job, or drop `appimage` from the bundle list above. linuxdeploy
-      # carries its own `strip`, which chokes on libraries built with newer
-      # relocation formats.
       - name: Build installers
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: tauri-apps/tauri-action@v1
@@ -170,3 +170,27 @@ jobs:
             - **Linux**: `.deb` for Debian and Ubuntu, or the portable `.AppImage`.
           releaseDraft: true
           uploadUpdaterJson: false
+          uploadPlainBinary: true
+
+      # The executable on its own: everything the app needs is compiled into
+      # it, apart from the system webview (WebView2 on Windows, WebKitGTK on
+      # Linux). No installer, nothing written outside the folder it sits in.
+      - name: Collect the portable build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p portable
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp target/release/rpgmaker-save-editor.exe portable/
+          else
+            # A tarball, because a zipped artifact loses the executable bit.
+            tar -czf portable/rpgmaker-save-editor-linux-x86_64.tar.gz \
+              -C target/release rpgmaker-save-editor
+          fi
+          ls -l portable/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.portable_artifact }}
+          path: portable/*
+          if-no-files-found: error
