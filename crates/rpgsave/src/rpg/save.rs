@@ -731,24 +731,8 @@ impl SaveFile {
     /// half-written save behind.
     pub fn write(&mut self, path: &Path, make_backup: bool) -> io::Result<Option<PathBuf>> {
         let bytes = self.to_bytes();
-
-        let backup = if make_backup && path.exists() {
-            let backup = backup_path(path);
-            std::fs::copy(path, &backup)?;
-            prune_backups(path, 10);
-            Some(backup)
-        } else {
-            None
-        };
-
+        let backup = write_file_safely(path, &bytes, make_backup)?;
         self.size_bytes = bytes.len();
-        let temp = path.with_extension(format!(
-            "{}.tmp",
-            path.extension().and_then(|e| e.to_str()).unwrap_or("save")
-        ));
-        std::fs::write(&temp, &bytes)?;
-        std::fs::rename(&temp, path)?;
-
         self.path = path.to_path_buf();
         self.dirty = false;
         self.playtime_edited = false;
@@ -799,6 +783,34 @@ fn has_symbol_key(heap: &Heap, entries: &[(Value, Value)], name: &str) -> bool {
         Value::Sym(s) => heap.sym(*s) == name,
         _ => false,
     })
+}
+
+/// Writes a save file, keeping a timestamped backup of what was there before.
+///
+/// The new bytes go to a temporary file in the same directory and are then
+/// renamed over the target, so an interrupted write cannot leave a
+/// half-written save behind.
+pub fn write_file_safely(
+    path: &Path,
+    bytes: &[u8],
+    make_backup: bool,
+) -> io::Result<Option<PathBuf>> {
+    let backup = if make_backup && path.exists() {
+        let backup = backup_path(path);
+        std::fs::copy(path, &backup)?;
+        prune_backups(path, 10);
+        Some(backup)
+    } else {
+        None
+    };
+
+    let temp = path.with_extension(format!(
+        "{}.tmp",
+        path.extension().and_then(|e| e.to_str()).unwrap_or("save")
+    ));
+    std::fs::write(&temp, bytes)?;
+    std::fs::rename(&temp, path)?;
+    Ok(backup)
 }
 
 /// A hash is the VX Ace save contents if it is keyed by the symbols the engine

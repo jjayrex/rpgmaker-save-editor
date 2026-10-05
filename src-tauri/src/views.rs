@@ -51,6 +51,7 @@ pub fn summary(save: &SaveFile, data: Option<&GameData>) -> Summary {
         save_count: save.system().and_then(|s| save.heap.ivar_int(s, "@save_count")),
 
         gold: save.gold(),
+        max_gold: rpgsave::rpg::save::MAX_GOLD,
         currency: data
             .and_then(|d| d.currency.clone())
             .unwrap_or_else(|| "G".to_owned()),

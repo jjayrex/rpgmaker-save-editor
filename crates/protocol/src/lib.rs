@@ -79,6 +79,8 @@ pub struct Summary {
     pub save_count: Option<i64>,
 
     pub gold: Option<i64>,
+    /// The most gold this engine will hold.
+    pub max_gold: i64,
     pub currency: String,
     pub steps: Option<i64>,
 

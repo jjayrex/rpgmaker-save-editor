@@ -7,8 +7,10 @@
 // `chunks_exact` keeps the crate buildable on older toolchains.
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
+pub mod lcf;
 pub mod marshal;
 pub mod rpg;
 
+pub use lcf::LcfSave;
 pub use marshal::{Heap, MarshalError, Node, NodeId, NodeKind, SymId, Value};
 pub use rpg::{Engine, GameData, ItemKind, SaveFile};

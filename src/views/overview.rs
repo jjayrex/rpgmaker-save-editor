@@ -33,6 +33,7 @@ fn PartyCard(summary: Summary) -> impl IntoView {
     let currency = summary.currency.clone();
     let gold = summary.gold;
     let steps = summary.steps;
+    let max_gold = summary.max_gold;
     let playtime = summary.playtime_seconds;
     let has_playtime = summary.has_playtime;
     let frame_rate = summary.frame_rate;
@@ -57,7 +58,7 @@ fn PartyCard(summary: Summary) -> impl IntoView {
                             </span>
                         })}
                         <p class="hint">
-                            "Gold caps at "{group_digits(99_999_999)}"."
+                            "This engine caps gold at "{group_digits(max_gold)}"."
                         </p>
                     </>
                 }.into_any(),

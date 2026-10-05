@@ -1,6 +1,10 @@
+mod backend;
+mod backend_lcf;
+mod backend_rgss;
 mod commands;
 pub mod state;
 pub mod views;
+pub mod views_lcf;
 
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -78,7 +82,7 @@ pub fn run() {
             let dirty = window
                 .state::<SharedEditor>()
                 .lock()
-                .map(|editor| editor.save.as_ref().is_some_and(|s| s.dirty))
+                .map(|editor| editor.save.as_ref().is_some_and(|s| s.is_dirty()))
                 .unwrap_or(false);
             if !dirty {
                 return;

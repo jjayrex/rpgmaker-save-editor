@@ -3,31 +3,42 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use rpgsave::lcf::LcfSave;
 use rpgsave::marshal::{Heap, NodeKind, Value};
 use rpgsave::rpg::{Engine, GameData, SaveFile};
 use rpgsave_protocol::Scalar;
 
+use crate::backend::Backend;
+
 #[derive(Default)]
 pub struct Editor {
-    pub save: Option<SaveFile>,
+    pub save: Option<Box<dyn Backend>>,
     pub data: Option<GameData>,
 }
 
 pub type SharedEditor = Mutex<Editor>;
 
 impl Editor {
-    pub fn save(&self) -> Result<&SaveFile, String> {
-        self.save.as_ref().ok_or_else(|| "No save file is open.".to_owned())
+    pub fn save(&self) -> Result<&dyn Backend, String> {
+        self.save
+            .as_deref()
+            .ok_or_else(|| "No save file is open.".to_owned())
     }
 
-    pub fn save_mut(&mut self) -> Result<&mut SaveFile, String> {
-        self.save.as_mut().ok_or_else(|| "No save file is open.".to_owned())
+    pub fn save_mut(&mut self) -> Result<&mut dyn Backend, String> {
+        match self.save.as_deref_mut() {
+            Some(save) => Ok(save),
+            None => Err("No save file is open.".to_owned()),
+        }
     }
 
     /// The open save plus the database, which commands usually need together.
-    pub fn both(&mut self) -> Result<(&mut SaveFile, Option<&GameData>), String> {
+    pub fn both(&mut self) -> Result<(&mut dyn Backend, Option<&GameData>), String> {
         let data = self.data.as_ref();
-        let save = self.save.as_mut().ok_or_else(|| "No save file is open.".to_owned())?;
+        let save = self
+            .save
+            .as_deref_mut()
+            .ok_or_else(|| "No save file is open.".to_owned())?;
         Ok((save, data))
     }
 
@@ -35,38 +46,44 @@ impl Editor {
         self.data.as_ref()
     }
 
+    /// Opens whichever format the file turns out to be.
+    ///
+    /// RPG Maker 2000 and 2003 saves announce themselves in their first bytes;
+    /// everything else is a Ruby Marshal stream from one of the RGSS engines.
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+
+        if LcfSave::looks_like_save(&bytes) {
+            let mut save = LcfSave::from_bytes(&bytes).map_err(|e| e.to_string())?;
+            save.path = path.to_path_buf();
+            self.data = None;
+            self.save = Some(Box::new(save));
+            return Ok(());
+        }
+
         let save = SaveFile::open(path).map_err(|e| e.to_string())?;
         self.data = save.guess_data_dir().map(|dir| GameData::load(&dir, save.engine));
-        self.save = Some(save);
+        self.save = Some(Box::new(save));
         Ok(())
     }
 
     pub fn load_data_dir(&mut self, dir: &Path) -> Result<(), String> {
-        let engine = self.save()?.engine;
-        let data = GameData::load(dir, engine);
-        if data.is_empty() {
-            return Err(format!(
-                "No {} database files were found in {}.",
-                engine.label(),
-                dir.display()
-            ));
-        }
+        let save = self.save()?;
+        let data = save.load_game_data(dir).ok_or_else(|| {
+            format!("No database files this editor understands were found in {}.", dir.display())
+        })?;
         self.data = Some(data);
         Ok(())
-    }
-
-    /// Looks up an actor by id, or explains that it is not in the save.
-    pub fn actor(&self, actor_id: i64) -> Result<Value, String> {
-        self.save()?
-            .actor(actor_id)
-            .ok_or_else(|| format!("Actor {actor_id} is not stored in this save."))
     }
 
     /// Fails early when an actor id does not exist, so that the fan-out to
     /// every stored copy of it can report "no such field" instead.
     pub fn require_actor(&self, actor_id: i64) -> Result<(), String> {
-        self.actor(actor_id).map(|_| ())
+        if self.save()?.has_actor(actor_id) {
+            Ok(())
+        } else {
+            Err(format!("Actor {actor_id} is not stored in this save."))
+        }
     }
 }
 
@@ -87,7 +104,8 @@ pub fn scalar_of(heap: &Heap, value: Value) -> Option<Scalar> {
 }
 
 /// Builds a Ruby value from an edited scalar. Strings follow the engine's
-/// convention: RGSS3 tags every string with its encoding, RGSS2 does not.
+/// convention: RGSS3 tags every string with its encoding, RGSS1 and RGSS2 do
+/// not.
 pub fn value_of(heap: &mut Heap, engine: Engine, scalar: &Scalar) -> Value {
     match scalar {
         Scalar::Nil => Value::Nil,

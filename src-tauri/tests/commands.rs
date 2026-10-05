@@ -12,7 +12,10 @@ use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_K
 use tauri::webview::InvokeRequest;
 use tauri::WebviewWindow;
 
-use rpgsave_protocol::{ActorView, InventoryView, NodeView, Summary, SwitchPage, WriteResult};
+use rpgsave_protocol::{
+    ActorView, ChildView, InventoryView, NodeView, Scalar, Slot, Summary, SwitchPage,
+    VariablePage, WriteResult,
+};
 
 fn fixture(name: &str) -> String {
     format!(
@@ -281,4 +284,195 @@ fn an_xp_save_goes_through_the_same_commands() {
 
     let summary: Summary = call(&webview, "set_party", json!({ "ids": [2, 1] })).expect("set_party");
     assert_eq!(summary.party.iter().map(|m| m.actor_id).collect::<Vec<_>>(), vec![2, 1]);
+}
+
+// ------------------------------------------------- RPG Maker 2000 and 2003
+
+fn open_lsd(webview: &WebviewWindow<MockRuntime>) -> Summary {
+    call(webview, "open_save", json!({ "path": fixture("Save01.lsd") })).expect("open the save")
+}
+
+#[test]
+fn an_rpg_maker_2000_save_opens_through_the_same_commands() {
+    let webview = editor();
+    let summary = open_lsd(&webview);
+
+    assert_eq!(summary.engine, "rm2k");
+    assert_eq!(summary.engine_label, "2000/2003");
+    assert_eq!(summary.frame_rate, 60);
+    assert_eq!(summary.gold, Some(0));
+    assert_eq!(summary.steps, Some(5));
+    assert_eq!(summary.playtime_seconds, 58);
+    assert_eq!(summary.map_id, Some(1));
+    assert_eq!((summary.player_x, summary.player_y), (Some(31), Some(18)));
+    assert_eq!(summary.party.len(), 2);
+    assert_eq!(summary.roster.len(), 5);
+    assert_eq!(summary.self_switch_count, 0, "these engines have no self switches");
+    // No database is read for this format, so the names are ids.
+    assert_eq!(summary.party[0].name, "Actor 1");
+}
+
+#[test]
+fn rpg_maker_2000_actors_are_read_and_edited() {
+    let webview = editor();
+    open_lsd(&webview);
+
+    let actor: ActorView = call(&webview, "get_actor", json!({ "actorId": 1 })).expect("get_actor");
+    assert_eq!(actor.level, Some(1));
+    assert_eq!(actor.hp, Some(300));
+    assert_eq!(actor.mp, Some(100));
+    assert_eq!(actor.mp_label, "SP");
+    assert_eq!(actor.equips.len(), 5);
+    assert_eq!(actor.equips[0].label, "Weapon");
+    assert_eq!(actor.equips[0].item_id, 17);
+    assert_eq!(actor.params[0].label, "Max HP");
+    assert!(!actor.exp_follows_level, "the experience curve lives in the database");
+
+    // The interface sends the field names the view reported.
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_int",
+        json!({ "actorId": 1, "ivar": "@hp", "value": 555 }),
+    )
+    .expect("set hp");
+    assert_eq!(actor.hp, Some(555));
+
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_int",
+        json!({ "actorId": 1, "ivar": actor.mp_ivar, "value": 42 }),
+    )
+    .expect("set sp");
+    assert_eq!(actor.mp, Some(42));
+
+    let actor: ActorView =
+        call(&webview, "set_actor_text", json!({ "actorId": 1, "ivar": "@name", "text": "Franz" }))
+            .expect("rename");
+    assert_eq!(actor.name, "Franz");
+
+    let actor: ActorView = call(&webview, "set_actor_level", json!({ "actorId": 1, "level": 30 }))
+        .expect("set level");
+    assert_eq!(actor.level, Some(30));
+
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_equip",
+        json!({ "actorId": 1, "slot": 1, "kind": "item", "itemId": 33 }),
+    )
+    .expect("equip");
+    assert_eq!(actor.equips[1].item_id, 33);
+}
+
+#[test]
+fn rpg_maker_2000_inventory_switches_and_variables() {
+    let webview = editor();
+    open_lsd(&webview);
+
+    let inventory: InventoryView =
+        call(&webview, "get_inventory", json!({ "kind": "item" })).expect("inventory");
+    assert_eq!(inventory.rows.len(), 1);
+    assert_eq!((inventory.rows[0].id, inventory.rows[0].count), (1, 10));
+
+    let inventory: InventoryView = call(
+        &webview,
+        "set_item_count",
+        json!({ "kind": "item", "id": 4, "count": 7 }),
+    )
+    .expect("add an item");
+    assert_eq!(inventory.rows.len(), 2);
+    assert!(inventory.rows.iter().any(|r| r.id == 4 && r.count == 7));
+
+    // Switches and variables grow on demand, as the format stores only as many
+    // as the game has touched.
+    call::<Value>(&webview, "set_switch", json!({ "id": 3, "on": true })).expect("set switch");
+    let page: SwitchPage =
+        call(&webview, "get_switch_page", json!({ "query": "", "offset": 0, "limit": 20 }))
+            .expect("switches");
+    assert_eq!(page.total, 3);
+    assert!(page.rows.iter().any(|r| r.id == 3 && r.on));
+
+    call::<Value>(
+        &webview,
+        "set_variable",
+        json!({ "id": 2, "value": { "type": "int", "value": -40 } }),
+    )
+    .expect("set variable");
+    let page: VariablePage =
+        call(&webview, "get_variable_page", json!({ "query": "", "offset": 0, "limit": 20 }))
+            .expect("variables");
+    assert_eq!(page.rows[0].value, Scalar::Int(7), "the value that was already there");
+    assert_eq!(page.rows[1].value, Scalar::Int(-40));
+}
+
+#[test]
+fn the_rpg_maker_2000_chunk_tree_can_be_browsed_and_edited() {
+    let webview = editor();
+    open_lsd(&webview);
+
+    let root: NodeView = call(&webview, "raw_root", json!({})).expect("raw_root");
+    let inventory = root
+        .children
+        .iter()
+        .find(|c| c.key.starts_with("inventory"))
+        .expect("the inventory chunk");
+
+    let node: NodeView =
+        call(&webview, "raw_node", json!({ "node": inventory.node.unwrap() })).expect("raw_node");
+    assert_eq!(node.title, "inventory");
+    let steps = node.children.iter().find(|c| c.key.starts_with("steps")).expect("steps");
+    assert_eq!(steps.scalar, Some(Scalar::Int(5)));
+
+    // Editing through the raw view reaches the same field the Overview shows.
+    let updated: NodeView = call(
+        &webview,
+        "set_raw_scalar",
+        json!({
+            "node": inventory.node,
+            "slot": { "ivar": steps.slot_tag() },
+            "value": { "type": "int", "value": 123 },
+        }),
+    )
+    .expect("set_raw_scalar");
+    assert!(updated.children.iter().any(|c| c.preview == "123"));
+
+    let summary: Summary = call(&webview, "summary", json!({})).expect("summary");
+    assert_eq!(summary.steps, Some(123));
+}
+
+/// Writing goes through the same path as the other engines.
+#[test]
+fn an_edited_rpg_maker_2000_save_can_be_written_and_reopened() {
+    let webview = editor();
+    open_lsd(&webview);
+    call::<Summary>(&webview, "set_gold", json!({ "value": 1_234 })).expect("set gold");
+
+    let target = std::env::temp_dir().join("rpgsave-command-test.lsd");
+    let _ = std::fs::remove_file(&target);
+    let result: WriteResult = call(
+        &webview,
+        "write_save",
+        json!({ "path": target.to_string_lossy(), "backup": false }),
+    )
+    .expect("write");
+    assert!(std::path::Path::new(&result.path).is_file());
+
+    let reopened: Summary =
+        call(&webview, "open_save", json!({ "path": target.to_string_lossy() })).expect("reopen");
+    assert_eq!(reopened.gold, Some(1_234));
+    assert_eq!(reopened.engine, "rm2k");
+    let _ = std::fs::remove_file(&target);
+}
+
+/// Helper: the raw view addresses a field by its chunk number.
+trait SlotTag {
+    fn slot_tag(&self) -> String;
+}
+
+impl SlotTag for ChildView {
+    fn slot_tag(&self) -> String {
+        match &self.slot {
+            Slot::Ivar(tag) => tag.clone(),
+            other => panic!("expected a field slot, got {other:?}"),
+        }
+    }
 }
