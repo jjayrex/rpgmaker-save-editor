@@ -43,8 +43,40 @@ fn field_tag(field: &str) -> Option<u32> {
     }
 }
 
-fn actor_label(save: &LcfSave, id: i64) -> String {
-    save.actor_name(id).unwrap_or_else(|| format!("Actor {id}"))
+/// A renamed actor keeps the name the game gave it; otherwise the database
+/// has it, and failing that there is only the id.
+fn actor_label(save: &LcfSave, data: Option<&GameData>, id: i64) -> String {
+    save.actor_name(id)
+        .or_else(|| data?.actor(id).map(|a| a.name.clone()).filter(|n| !n.is_empty()))
+        .unwrap_or_else(|| format!("Actor {id}"))
+}
+
+/// An actor's class: the save records one only when the game has changed it,
+/// so the database holds it the rest of the time.
+fn actor_class_id(save: &LcfSave, data: Option<&GameData>, id: i64) -> Option<i64> {
+    save.actor_int(id, actor_tag::CLASS_ID)
+        .filter(|c| *c != 0)
+        .or_else(|| data?.actor(id).map(|a| a.class_id).filter(|c| *c != 0))
+}
+
+/// Which of the interface's three inventory tabs an item belongs on.
+///
+/// These engines keep one table for everything carried and mark each entry
+/// with what it is, so the tabs are filled by item type rather than by
+/// separate tables.
+fn item_kind(data: Option<&GameData>, id: i64) -> &'static str {
+    let Some(entry) = data.and_then(|d| d.items.iter().find(|e| e.id == id)) else {
+        return "item";
+    };
+    match entry.etype_id {
+        1 => "weapon",
+        2..=5 => "armor",
+        _ => "item",
+    }
+}
+
+fn item_entry(data: Option<&GameData>, id: i64) -> Option<&rpgsave::rpg::gamedata::Entry> {
+    data?.items.iter().find(|e| e.id == id)
 }
 
 impl Backend for LcfSave {
@@ -80,22 +112,25 @@ impl Backend for LcfSave {
     }
 
     fn guess_data_dir(&self) -> Option<PathBuf> {
-        None
+        // The database sits beside the save, in the game's own folder.
+        let dir = self.path.parent()?;
+        rpgsave::lcf::database::find_database(dir).map(|_| dir.to_path_buf())
     }
 
-    fn load_game_data(&self, _dir: &Path) -> Option<GameData> {
-        None
+    fn load_game_data(&self, dir: &Path) -> Option<GameData> {
+        rpgsave::lcf::database::load(dir)
     }
 
-    fn summary(&self, _data: Option<&GameData>) -> Summary {
+    fn summary(&self, data: Option<&GameData>) -> Summary {
         let party = self
             .party_member_ids()
             .into_iter()
             .map(|id| PartyMember {
                 actor_id: id,
-                name: actor_label(self, id),
+                name: actor_label(self, data, id),
                 level: self.actor_int(id, actor_tag::LEVEL).unwrap_or(0),
-                class_name: None,
+                class_name: actor_class_id(self, data, id)
+                    .and_then(|c| data?.class_name(c).map(str::to_owned)),
                 hp: self.actor_int(id, actor_tag::CURRENT_HP),
                 mp: self.actor_int(id, actor_tag::CURRENT_SP),
             })
@@ -107,7 +142,7 @@ impl Backend for LcfSave {
             .into_iter()
             .map(|id| RosterEntry {
                 actor_id: id,
-                name: actor_label(self, id),
+                name: actor_label(self, data, id),
                 in_save: true,
                 in_party: in_party.contains(&id),
             })
@@ -129,10 +164,10 @@ impl Backend for LcfSave {
             document_count: 1,
             notes: self.notes.clone(),
 
-            game_title: self.title_hero_name(),
-            data_dir: None,
-            data_loaded: Vec::new(),
-            data_missing: Vec::new(),
+            game_title: data.and_then(|d| d.game_title.clone()),
+            data_dir: data.map(|d| d.dir.to_string_lossy().into_owned()),
+            data_loaded: data.map(|d| d.loaded.clone()).unwrap_or_default(),
+            data_missing: data.map(|d| d.missing.clone()).unwrap_or_default(),
 
             has_playtime: true,
             playtime_seconds: seconds,
@@ -142,10 +177,13 @@ impl Backend for LcfSave {
 
             gold: Some(self.gold()),
             max_gold: MAX_GOLD,
-            currency: "G".to_owned(),
+            currency: data
+                .and_then(|d| d.currency.clone())
+                .unwrap_or_else(|| "G".to_owned()),
             steps: Some(self.steps()),
 
             map_id: Some(self.map_id()),
+            // Map names live in RPG_RT.lmt, which this editor does not read.
             map_name: None,
             player_x: Some(x),
             player_y: Some(y),
@@ -159,8 +197,9 @@ impl Backend for LcfSave {
         }
     }
 
-    fn actor_view(&self, _data: Option<&GameData>, actor_id: i64) -> Option<ActorView> {
+    fn actor_view(&self, data: Option<&GameData>, actor_id: i64) -> Option<ActorView> {
         let chunks = self.actor(actor_id)?;
+        let class_id = actor_class_id(self, data, actor_id);
 
         let params = MODS
             .iter()
@@ -180,32 +219,56 @@ impl Backend for LcfSave {
             .enumerate()
             .map(|(slot, item_id)| EquipSlot {
                 slot,
-                label: EQUIP_SLOTS.get(slot).copied().unwrap_or("Equipment").to_owned(),
-                kind: "item".to_owned(),
+                // The game names its own equipment slots in the database.
+                label: data
+                    .and_then(|d| d.equip_type_name(slot))
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        EQUIP_SLOTS.get(slot).copied().unwrap_or("Equipment").to_owned()
+                    }),
+                kind: item_kind(data, item_id).to_owned(),
+                item_name: item_entry(data, item_id).map(|e| e.name.clone()),
                 item_id,
-                item_name: None,
             })
             .collect();
 
         let skills = self
             .actor_skills(actor_id)
             .into_iter()
-            .map(|id| NamedId { id, name: format!("Skill {id}") })
+            .map(|id| NamedId {
+                id,
+                name: data
+                    .and_then(|d| d.skill_name(id))
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("Skill {id}")),
+            })
             .collect();
 
         Some(ActorView {
             actor_id,
-            name: actor_label(self, actor_id),
+            name: actor_label(self, data, actor_id),
             nickname: chunks
                 .string(actor_tag::TITLE)
                 .filter(|t| *t != rpgsave::lcf::save::UNCHANGED_NAME)
-                .map(rpgsave::marshal::decode_ruby_string),
-            class_id: chunks.int(actor_tag::CLASS_ID).map(i64::from),
-            class_name: None,
-            classes: Vec::new(),
+                .map(rpgsave::marshal::decode_ruby_string)
+                .or_else(|| data?.actor(actor_id).map(|a| a.nickname.clone()))
+                .filter(|t| !t.is_empty()),
+            class_id,
+            class_name: class_id.and_then(|c| data?.class_name(c).map(str::to_owned)),
+            classes: data
+                .map(|d| {
+                    d.classes
+                        .iter()
+                        .map(|c| NamedId { id: c.id, name: c.name.clone() })
+                        .collect()
+                })
+                .unwrap_or_default(),
             in_party: self.party_member_ids().contains(&actor_id),
 
             level: chunks.int(actor_tag::LEVEL).map(i64::from),
+            // The engine's ceiling rather than the game's `final_level`: that
+            // field is unreliable in practice — this editor's own test file
+            // sets it to 1 while shipping the full 99 levels of stat curves.
             max_level: 99,
             exp: chunks.int(actor_tag::EXP).map(i64::from),
             exp_this_level: None,
@@ -229,41 +292,74 @@ impl Backend for LcfSave {
         })
     }
 
-    fn inventory(&self, _data: Option<&GameData>, kind: &str) -> Reply<InventoryView> {
-        // These engines keep one database table for everything carried, so
-        // weapons and armour are items like any other.
-        let rows = if kind == "item" {
-            self.items()
-                .into_iter()
-                .map(|(id, count)| ItemRow {
+    fn inventory(&self, data: Option<&GameData>, kind: &str) -> Reply<InventoryView> {
+        // One table holds everything carried, with each entry marked as what it
+        // is, so the three tabs are filled by item type.
+        let rows = self
+            .items()
+            .into_iter()
+            .filter(|(id, _)| item_kind(data, *id) == kind)
+            .map(|(id, count)| {
+                let entry = item_entry(data, id);
+                ItemRow {
                     id,
                     count,
-                    name: None,
+                    name: entry.map(|e| e.name.clone()),
                     icon_index: 0,
-                    description: String::new(),
-                    price: 0,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+                    description: entry.map(|e| e.description.clone()).unwrap_or_default(),
+                    price: entry.map(|e| e.price).unwrap_or(0),
+                }
+            })
+            .collect();
         Ok(InventoryView { kind: kind.to_owned(), rows, max_count: MAX_ITEM_COUNT })
     }
 
-    fn catalog(&self, _data: Option<&GameData>, _kind: &str, _query: &str) -> Vec<CatalogEntry> {
-        Vec::new()
+    fn catalog(&self, data: Option<&GameData>, kind: &str, query: &str) -> Vec<CatalogEntry> {
+        let Some(data) = data else { return Vec::new() };
+        let held = self.items();
+        let query = query.trim().to_lowercase();
+        data.items
+            .iter()
+            // Entries with no name are the unused rows every database carries.
+            .filter(|e| !e.name.is_empty())
+            .filter(|e| item_kind(Some(data), e.id) == kind)
+            .filter(|e| {
+                query.is_empty()
+                    || e.name.to_lowercase().contains(&query)
+                    || e.id.to_string() == query
+            })
+            .map(|e| CatalogEntry {
+                id: e.id,
+                name: e.name.clone(),
+                icon_index: 0,
+                description: e.description.clone(),
+                price: e.price,
+                etype_id: e.etype_id,
+                held: held.iter().find(|(id, _)| *id == e.id).map(|(_, c)| *c).unwrap_or(0),
+            })
+            .collect()
     }
 
     fn switch_page(
         &self,
-        _data: Option<&GameData>,
+        data: Option<&GameData>,
         query: &str,
         offset: usize,
         limit: usize,
     ) -> SwitchPage {
-        let total = self.switch_count();
+        // The database knows how many the game defines, which is more than a
+        // save that has only touched the first few.
+        let total = self
+            .switch_count()
+            .max(data.map(|d| d.switch_names.len().saturating_sub(1)).unwrap_or(0));
+        let name = |id: i64| data.and_then(|d| d.switch_name(id)).map(str::to_owned);
+        let query = query.trim().to_lowercase();
         let matches: Vec<i64> = (1..=total as i64)
-            .filter(|id| query.trim().is_empty() || id.to_string().contains(query.trim()))
+            .filter(|id| {
+                query.is_empty()
+                    || id.to_string().contains(&query)
+                    || name(*id).is_some_and(|n| n.to_lowercase().contains(&query))
+            })
             .collect();
         SwitchPage {
             total,
@@ -272,21 +368,29 @@ impl Backend for LcfSave {
                 .into_iter()
                 .skip(offset)
                 .take(limit)
-                .map(|id| SwitchRow { id, name: None, on: self.switch(id) })
+                .map(|id| SwitchRow { id, name: name(id), on: self.switch(id) })
                 .collect(),
         }
     }
 
     fn variable_page(
         &self,
-        _data: Option<&GameData>,
+        data: Option<&GameData>,
         query: &str,
         offset: usize,
         limit: usize,
     ) -> VariablePage {
-        let total = self.variable_count();
+        let total = self
+            .variable_count()
+            .max(data.map(|d| d.variable_names.len().saturating_sub(1)).unwrap_or(0));
+        let name = |id: i64| data.and_then(|d| d.variable_name(id)).map(str::to_owned);
+        let query = query.trim().to_lowercase();
         let matches: Vec<i64> = (1..=total as i64)
-            .filter(|id| query.trim().is_empty() || id.to_string().contains(query.trim()))
+            .filter(|id| {
+                query.is_empty()
+                    || id.to_string().contains(&query)
+                    || name(*id).is_some_and(|n| n.to_lowercase().contains(&query))
+            })
             .collect();
         VariablePage {
             total,
@@ -297,7 +401,7 @@ impl Backend for LcfSave {
                 .take(limit)
                 .map(|id| VariableRow {
                     id,
-                    name: None,
+                    name: name(id),
                     value: Scalar::Int(self.variable(id)),
                     complex: None,
                 })

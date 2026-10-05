@@ -13,7 +13,7 @@ use tauri::webview::InvokeRequest;
 use tauri::WebviewWindow;
 
 use rpgsave_protocol::{
-    ActorView, ChildView, InventoryView, NodeView, Scalar, Slot, Summary, SwitchPage,
+    ActorView, CatalogEntry, ChildView, InventoryView, NodeView, Scalar, Slot, Summary, SwitchPage,
     VariablePage, WriteResult,
 };
 
@@ -308,8 +308,6 @@ fn an_rpg_maker_2000_save_opens_through_the_same_commands() {
     assert_eq!(summary.party.len(), 2);
     assert_eq!(summary.roster.len(), 5);
     assert_eq!(summary.self_switch_count, 0, "these engines have no self switches");
-    // No database is read for this format, so the names are ids.
-    assert_eq!(summary.party[0].name, "Actor 1");
 }
 
 #[test]
@@ -388,7 +386,7 @@ fn rpg_maker_2000_inventory_switches_and_variables() {
     let page: SwitchPage =
         call(&webview, "get_switch_page", json!({ "query": "", "offset": 0, "limit": 20 }))
             .expect("switches");
-    assert_eq!(page.total, 3);
+    assert!(page.total >= 100, "the database knows how many the game defines");
     assert!(page.rows.iter().any(|r| r.id == 3 && r.on));
 
     call::<Value>(
@@ -475,4 +473,73 @@ impl SlotTag for ChildView {
             other => panic!("expected a field slot, got {other:?}"),
         }
     }
+}
+
+/// With `RPG_RT.ldb` beside the save, ids become names.
+#[test]
+fn the_rpg_maker_2000_database_supplies_names() {
+    let webview = editor();
+    let summary = open_lsd(&webview);
+
+    assert_eq!(summary.data_loaded, vec!["RPG_RT.ldb".to_owned()]);
+    assert_eq!(summary.currency, "G");
+    assert_eq!(summary.party[0].name, "Franz", "the database names the actors");
+    assert_eq!(summary.party[0].class_name.as_deref(), Some("Technomancer"));
+    assert_eq!(summary.roster.len(), 5);
+    assert!(summary.roster.iter().any(|r| r.name == "Ser Daine"));
+
+    let actor: ActorView = call(&webview, "get_actor", json!({ "actorId": 1 })).expect("get_actor");
+    assert_eq!(actor.name, "Franz");
+    assert_eq!(actor.class_name.as_deref(), Some("Technomancer"));
+    assert_eq!(actor.classes.len(), 5, "the class picker is filled from the database");
+    // This game renames its own equipment slots.
+    assert_eq!(actor.equips[0].label, "Weapon");
+    assert_eq!(actor.equips[2].label, "Ring");
+
+    // Carried items are split across the tabs by what the database says they are.
+    let items: InventoryView =
+        call(&webview, "get_inventory", json!({ "kind": "item" })).expect("items");
+    assert_eq!(items.rows.len(), 1);
+    assert_eq!(items.rows[0].name.as_deref(), Some("Potion"));
+    assert_eq!(items.rows[0].description, "Recovers 100 HP");
+    assert_eq!(items.rows[0].price, 10);
+
+    // The picker can offer everything the game defines.
+    let catalog: Vec<CatalogEntry> =
+        call(&webview, "get_catalog", json!({ "kind": "item", "query": "potion" }))
+            .expect("catalog");
+    assert!(catalog.iter().any(|e| e.name == "Hi-Potion"));
+    assert!(
+        catalog.iter().all(|e| !e.name.is_empty()),
+        "the unused rows every database carries are left out"
+    );
+
+    let switches: SwitchPage =
+        call(&webview, "get_switch_page", json!({ "query": "htown", "offset": 0, "limit": 20 }))
+            .expect("switches");
+    assert_eq!(switches.rows.len(), 1, "switches can be searched by name");
+    assert_eq!(switches.rows[0].name.as_deref(), Some("htown"));
+
+    let variables: VariablePage =
+        call(&webview, "get_variable_page", json!({ "query": "", "offset": 0, "limit": 10 }))
+            .expect("variables");
+    assert!(variables.rows.iter().any(|r| r.name.as_deref() == Some("Powercell")));
+}
+
+/// A renamed actor keeps the name the game gave it, over the database's.
+#[test]
+fn a_renamed_actor_keeps_its_own_name() {
+    let webview = editor();
+    open_lsd(&webview);
+
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_text",
+        json!({ "actorId": 1, "ivar": "@name", "text": "Franziska" }),
+    )
+    .expect("rename");
+    assert_eq!(actor.name, "Franziska");
+
+    let summary: Summary = call(&webview, "summary", json!({})).expect("summary");
+    assert_eq!(summary.party[0].name, "Franziska");
 }

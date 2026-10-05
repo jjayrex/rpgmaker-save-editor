@@ -5,6 +5,7 @@
 //! follow liblcf, EasyRPG's reference implementation.
 
 pub mod chunk;
+pub mod database;
 pub mod save;
 
 pub use chunk::{Array, Chunk, Chunks};

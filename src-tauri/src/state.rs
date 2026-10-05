@@ -53,17 +53,18 @@ impl Editor {
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
 
-        if LcfSave::looks_like_save(&bytes) {
+        let save: Box<dyn Backend> = if LcfSave::looks_like_save(&bytes) {
             let mut save = LcfSave::from_bytes(&bytes).map_err(|e| e.to_string())?;
             save.path = path.to_path_buf();
-            self.data = None;
-            self.save = Some(Box::new(save));
-            return Ok(());
-        }
+            Box::new(save)
+        } else {
+            Box::new(SaveFile::open(path).map_err(|e| e.to_string())?)
+        };
 
-        let save = SaveFile::open(path).map_err(|e| e.to_string())?;
-        self.data = save.guess_data_dir().map(|dir| GameData::load(&dir, save.engine));
-        self.save = Some(Box::new(save));
+        // Whichever engine it is, look beside the save for the database that
+        // turns ids into names.
+        self.data = save.guess_data_dir().and_then(|dir| save.load_game_data(&dir));
+        self.save = Some(save);
         Ok(())
     }
 

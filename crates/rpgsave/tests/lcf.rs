@@ -1,6 +1,7 @@
 // RPG Maker 2000 / 2003 saves
 
 use rpgsave::lcf::save::{actor, LcfSave};
+use rpgsave::rpg::save::ItemKind;
 
 fn fixture() -> Vec<u8> {
     std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/Save01.lsd")).expect("read")
@@ -141,4 +142,62 @@ fn the_save_menu_header_follows_the_leader() {
 
     let reloaded = LcfSave::from_bytes(&save.to_bytes()).expect("reparse");
     assert_eq!(reloaded.title_hero_name().as_deref(), Some("Mirai"));
+}
+
+// ------------------------------------------------------------ the database
+
+fn fixtures() -> std::path::PathBuf {
+    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
+}
+
+#[test]
+fn the_database_turns_ids_into_names() {
+    let data = rpgsave::lcf::database::load(&fixtures()).expect("RPG_RT.ldb");
+
+    assert_eq!(data.actors.len(), 5);
+    assert_eq!(data.actor(1).map(|a| a.name.as_str()), Some("Franz"));
+    assert_eq!(data.actor(3).map(|a| a.name.as_str()), Some("Ser Daine"));
+    assert_eq!(data.actor(1).map(|a| a.class_id), Some(1));
+    assert_eq!(data.class_name(1), Some("Technomancer"));
+    assert_eq!(data.class_name(5), Some("Mechabruiser"));
+
+    assert_eq!(data.entry_name(ItemKind::Item, 1), Some("Potion"));
+    assert_eq!(data.items.iter().find(|i| i.id == 1).map(|i| i.price), Some(10));
+    assert_eq!(
+        data.items.iter().find(|i| i.id == 1).map(|i| i.description.as_str()),
+        Some("Recovers 100 HP")
+    );
+    assert_eq!(data.skill_name(1), Some("Poison Attack"));
+    assert_eq!(data.state_name(1), Some("Death"));
+
+    // Terms, including the equipment slots this game renamed.
+    assert_eq!(data.currency.as_deref(), Some("G"));
+    assert_eq!(data.equip_type_name(0), Some("Weapon"));
+    assert_eq!(data.equip_type_name(2), Some("Ring"));
+
+    assert_eq!(data.switch_name(3), Some("htown"));
+    assert_eq!(data.variable_name(6), Some("Powercell"));
+    assert_eq!(data.switch_name(1), None, "unnamed switches stay unnamed");
+
+    assert!(data.loaded.contains(&"RPG_RT.ldb".to_owned()));
+}
+
+/// Games are built on Windows and unpacked onto case-sensitive file systems,
+/// so the database turns up under several spellings.
+#[test]
+fn the_database_is_found_whatever_case_its_name_is_in() {
+    let dir = std::env::temp_dir().join(format!("rpgsave-ldb-case-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(fixtures().join("RPG_RT.ldb"), dir.join("rpg_rt.LDB")).unwrap();
+
+    let data = rpgsave::lcf::database::load(&dir).expect("found despite the spelling");
+    assert_eq!(data.actor(1).map(|a| a.name.as_str()), Some("Franz"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn something_that_is_not_a_database_is_refused() {
+    // A save file is the same chunk format with a different signature.
+    assert!(rpgsave::lcf::database::parse(&fixture()).is_none());
+    assert!(rpgsave::lcf::database::parse(b"\x04\x08{\x00").is_none());
 }
