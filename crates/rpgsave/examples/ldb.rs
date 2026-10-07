@@ -28,6 +28,10 @@ fn main() {
     for (id, name) in data.switch_names.iter().enumerate().filter(|(_, n)| !n.is_empty()).take(5) {
         println!("   #{id} {name}");
     }
+    println!("maps      {}", data.maps.len());
+    for (id, name) in data.maps.iter().take(6) {
+        println!("   #{id} {name}");
+    }
     println!("variables {} named", data.variable_names.iter().filter(|n| !n.is_empty()).count());
     for (id, name) in data.variable_names.iter().enumerate().filter(|(_, n)| !n.is_empty()).take(5) {
         println!("   #{id} {name}");

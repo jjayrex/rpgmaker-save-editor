@@ -1,8 +1,9 @@
 [package]
 name = "rpgmaker-save-editor-ui"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Front end for the RPG Maker Save Editor"
+license.workspace = true
 
 [dependencies]
 leptos = { version = "0.8", features = ["csr"] }
@@ -17,6 +18,12 @@ rpgsave-protocol = { path = "crates/protocol" }
 
 [workspace]
 members = ["src-tauri", "crates/rpgsave"]
+
+# The licence text is in LICENSE at the repository root. This is the "-only"
+# identifier because the project does not elect the AGPL's "or any later
+# version" option.
+[workspace.package]
+license = "AGPL-3.0-only"
 
 [profile.release]
 codegen-units = 1

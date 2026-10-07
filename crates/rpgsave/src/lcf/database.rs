@@ -17,6 +17,12 @@ pub const SIGNATURE: &str = "LcfDataBase";
 /// The file a game keeps its database in.
 pub const FILE_NAME: &str = "RPG_RT.ldb";
 
+/// The signature of a map tree.
+pub const MAP_TREE_SIGNATURE: &str = "LcfMapTree";
+
+/// The file holding the list of maps and their names.
+pub const MAP_TREE_FILE_NAME: &str = "RPG_RT.lmt";
+
 /// Sections of the database.
 mod section {
     pub const ACTORS: u32 = 0x0B;
@@ -52,12 +58,12 @@ mod terms {
     pub const SLOTS: [u32; 5] = [0x88, 0x89, 0x8A, 0x8B, 0x8C];
 }
 
-/// Finds the database beside a save file, whatever case the name is in.
+/// Finds one of a game's files, whatever case its name is in.
 ///
 /// Games made on Windows are routinely unpacked onto case-sensitive file
 /// systems, where `RPG_RT.LDB` and `rpg_rt.ldb` both turn up.
-pub fn find_database(dir: &Path) -> Option<std::path::PathBuf> {
-    let wanted = FILE_NAME.to_ascii_lowercase();
+pub fn find_file(dir: &Path, name: &str) -> Option<std::path::PathBuf> {
+    let wanted = name.to_ascii_lowercase();
     std::fs::read_dir(dir)
         .ok()?
         .flatten()
@@ -69,6 +75,10 @@ pub fn find_database(dir: &Path) -> Option<std::path::PathBuf> {
         })
 }
 
+pub fn find_database(dir: &Path) -> Option<std::path::PathBuf> {
+    find_file(dir, FILE_NAME)
+}
+
 /// Reads the database in a directory, if there is one this editor understands.
 pub fn load(dir: &Path) -> Option<GameData> {
     let path = find_database(dir)?;
@@ -77,6 +87,15 @@ pub fn load(dir: &Path) -> Option<GameData> {
     data.dir = dir.to_path_buf();
     // The game's name lives in the launcher's ini file rather than the database.
     data.game_title = read_ini_title(dir);
+
+    // Map names are in a file of their own.
+    match load_map_names(dir) {
+        Some(maps) => {
+            data.maps = maps;
+            data.loaded.push(MAP_TREE_FILE_NAME.to_owned());
+        }
+        None => data.missing.push(MAP_TREE_FILE_NAME.to_owned()),
+    }
     Some(data)
 }
 
@@ -107,9 +126,34 @@ pub fn parse(bytes: &[u8]) -> Option<GameData> {
     }
 
     data.loaded.push(FILE_NAME.to_owned());
-    // Map names live in RPG_RT.lmt, which this editor does not read yet.
-    data.missing.push("RPG_RT.lmt (map names)".to_owned());
     Some(data)
+}
+
+/// Reads the map names out of `RPG_RT.lmt`.
+///
+/// Unlike the database, the map tree's top level is not a chunk stream: the
+/// list of maps is written straight after the signature, so it is read as a
+/// bare array.
+pub fn load_map_names(dir: &Path) -> Option<std::collections::BTreeMap<i64, String>> {
+    let bytes = std::fs::read(find_file(dir, MAP_TREE_FILE_NAME)?).ok()?;
+    parse_map_names(&bytes)
+}
+
+pub fn parse_map_names(bytes: &[u8]) -> Option<std::collections::BTreeMap<i64, String>> {
+    let length = *bytes.first()? as usize;
+    if bytes.get(1..1 + length)? != MAP_TREE_SIGNATURE.as_bytes() {
+        return None;
+    }
+    let maps = Array::parse(&bytes[1 + length..]).ok()?;
+    Some(
+        maps.entries
+            .iter()
+            // Entry zero is the tree's root, which carries the project's name
+            // rather than a map's.
+            .filter(|(id, _)| *id != 0)
+            .filter_map(|(id, chunks)| Some((i64::from(*id), text(chunks, entry::NAME)?)))
+            .collect(),
+    )
 }
 
 fn structure(sections: &Chunks, tag: u32) -> Option<Chunks> {

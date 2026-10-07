@@ -8,6 +8,7 @@ Currently supports:
 - **RPG Maker VX Ace** (`.rvdata2`)
 - **RPG Maker VX** (`.rvdata`)
 - **RPG Maker XP** (`.rxdata`)
+- **RPG Maker 2000 and 2003** (`.lsd`)
 
 ## What it can edit
 
@@ -23,6 +24,18 @@ Currently supports:
 
 If the game's `Data` directory is readable, ids are resolved to names — items,
 skills, states, classes, maps, switches and variables.
+
+RPG Maker 2000 and 2003 predate RGSS and share a different format entirely —
+LCF, a tree of binary chunks rather than a Ruby object graph. Both engines write
+the same save format, so one reader serves both; the chunk numbers follow
+liblcf, EasyRPG's reference implementation. Their database is `RPG_RT.ldb` in
+the game folder, which the editor reads for actor, class, item, skill, state,
+switch and variable names, and for the game's own equipment slot and currency
+terms. Map names come from `RPG_RT.lmt` beside it, whose map list is written
+straight after the signature rather than as a chunk. The format has no
+self switches, nicknames or TP, and one table holds everything carried — the
+Items, Weapons and Armours tabs are filled by what the database says each entry
+is.
 
 The engines differ in more than their file extension, and the editor follows
 each one: XP counts play time at 40 frames a second rather than 60, calls the
@@ -50,16 +63,7 @@ cargo tauri dev        # run it
 cargo tauri build      # produce installers
 ```
 
-On Arch-based distributions the AppImage step fails with `failed to run
-linuxdeploy`: linuxdeploy carries its own `strip`, which cannot read the
-`.relr.dyn` sections in current system libraries. Either skip stripping with
-`NO_STRIP=true cargo tauri build`, or build just what you need with
-`cargo tauri build --bundles deb`.
-
 ## Automated builds
-
-`.github/workflows/build.yml` runs on pushes to `main`, on pull requests, and on
-demand from the Actions tab:
 
 - **Tests and lints** — `cargo clippy -D warnings` and the test suite. Pull
   requests stop here.

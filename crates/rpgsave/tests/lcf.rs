@@ -201,3 +201,29 @@ fn something_that_is_not_a_database_is_refused() {
     assert!(rpgsave::lcf::database::parse(&fixture()).is_none());
     assert!(rpgsave::lcf::database::parse(b"\x04\x08{\x00").is_none());
 }
+
+#[test]
+fn reads_map_names_from_the_map_tree() {
+    let maps = rpgsave::lcf::database::load_map_names(&fixtures()).expect("RPG_RT.lmt");
+
+    // 176 maps, and entry zero — the tree root, which holds the project name
+    // rather than a map — is left out.
+    assert_eq!(maps.len(), 176);
+    assert_eq!(maps.get(&1).map(String::as_str), Some("Airship_Under"));
+    assert_eq!(maps.get(&4).map(String::as_str), Some("Nerian Exterior"));
+    assert!(!maps.contains_key(&0));
+}
+
+#[test]
+fn the_database_load_picks_up_map_names() {
+    let data = rpgsave::lcf::database::load(&fixtures()).expect("RPG_RT.ldb");
+
+    assert_eq!(data.map_name(1), Some("Airship_Under"));
+    assert!(data.loaded.contains(&"RPG_RT.lmt".to_owned()));
+    assert!(data.missing.is_empty(), "{:?}", data.missing);
+}
+
+#[test]
+fn refuses_a_map_tree_that_is_not_one() {
+    assert!(rpgsave::lcf::database::parse_map_names(b"\x0bLcfSaveData\x00").is_none());
+}

@@ -475,14 +475,15 @@ impl SlotTag for ChildView {
     }
 }
 
-/// With `RPG_RT.ldb` beside the save, ids become names.
+/// With `RPG_RT.ldb` and `RPG_RT.lmt` beside the save, ids become names.
 #[test]
 fn the_rpg_maker_2000_database_supplies_names() {
     let webview = editor();
     let summary = open_lsd(&webview);
 
-    assert_eq!(summary.data_loaded, vec!["RPG_RT.ldb".to_owned()]);
+    assert_eq!(summary.data_loaded, vec!["RPG_RT.ldb".to_owned(), "RPG_RT.lmt".to_owned()]);
     assert_eq!(summary.currency, "G");
+    assert_eq!(summary.map_name.as_deref(), Some("Airship_Under"), "from the map tree");
     assert_eq!(summary.party[0].name, "Franz", "the database names the actors");
     assert_eq!(summary.party[0].class_name.as_deref(), Some("Technomancer"));
     assert_eq!(summary.roster.len(), 5);

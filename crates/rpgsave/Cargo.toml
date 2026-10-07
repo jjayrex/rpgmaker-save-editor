@@ -1,8 +1,9 @@
 [package]
 name = "rpgsave"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Ruby Marshal (4.8) codec and RPG Maker XP/VX/VX Ace save-game model"
+license.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

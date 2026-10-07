@@ -183,8 +183,9 @@ impl Backend for LcfSave {
             steps: Some(self.steps()),
 
             map_id: Some(self.map_id()),
-            // Map names live in RPG_RT.lmt, which this editor does not read.
-            map_name: None,
+            map_name: data
+                .and_then(|d| d.map_name(self.map_id()))
+                .map(str::to_owned),
             player_x: Some(x),
             player_y: Some(y),
 
