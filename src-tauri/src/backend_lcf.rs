@@ -1,9 +1,9 @@
 //! RPG Maker 2000 and 2003 behind the common interface.
 //!
-//! These saves carry ids and no names — the names live in `RPG_RT.ldb`, which
-//! this editor does not read — so lists show ids and anything the format does
-//! not store (nicknames on the RGSS model, self switches, maximum HP) is
-//! reported as absent rather than invented.
+//! These saves carry ids and no names: the names live in `RPG_RT.ldb` beside
+//! them, and without it lists show ids. Anything the format does not store at
+//! all (self switches, maximum HP, the experience curve) is reported as absent
+//! rather than invented.
 
 use std::path::{Path, PathBuf};
 

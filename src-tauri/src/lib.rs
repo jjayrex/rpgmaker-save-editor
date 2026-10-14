@@ -1,10 +1,12 @@
 mod backend;
 mod backend_lcf;
+mod backend_mv;
 mod backend_rgss;
 mod commands;
 pub mod state;
 pub mod views;
 pub mod views_lcf;
+pub mod views_mv;
 
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};

@@ -58,22 +58,7 @@ mod terms {
     pub const SLOTS: [u32; 5] = [0x88, 0x89, 0x8A, 0x8B, 0x8C];
 }
 
-/// Finds one of a game's files, whatever case its name is in.
-///
-/// Games made on Windows are routinely unpacked onto case-sensitive file
-/// systems, where `RPG_RT.LDB` and `rpg_rt.ldb` both turn up.
-pub fn find_file(dir: &Path, name: &str) -> Option<std::path::PathBuf> {
-    let wanted = name.to_ascii_lowercase();
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.to_ascii_lowercase() == wanted)
-        })
-}
+pub use crate::rpg::gamedata::find_file;
 
 pub fn find_database(dir: &Path) -> Option<std::path::PathBuf> {
     find_file(dir, FILE_NAME)
@@ -225,6 +210,7 @@ fn classes(sections: &Chunks) -> Vec<ClassInfo> {
             name: text(chunks, entry::NAME).unwrap_or_default(),
             exp_params: None,
             params: None,
+            param_curves: None,
         })
         .collect()
 }

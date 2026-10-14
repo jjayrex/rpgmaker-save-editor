@@ -1,6 +1,6 @@
 [package]
 name = "rpgsave-protocol"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Types exchanged between the Tauri backend and the Leptos front end"
 license.workspace = true

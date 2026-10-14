@@ -15,6 +15,24 @@ use crate::marshal::{self, Heap, Value};
 use super::engine::Engine;
 use super::rgss::Table;
 
+/// Finds one of a game's files, whatever case its name is in.
+///
+/// Games are built on Windows, where case does not matter, and then unpacked
+/// onto file systems where it does: `RPG_RT.LDB`, `rpg_rt.ldb` and `Data` next
+/// to `data` all turn up in the wild.
+pub fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    let wanted = name.to_ascii_lowercase();
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.to_ascii_lowercase() == wanted)
+        })
+}
+
 /// One row of an RPG Maker database table.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Entry {
@@ -43,10 +61,14 @@ pub struct ActorInfo {
 pub struct ClassInfo {
     pub id: i64,
     pub name: String,
-    /// VX Ace `[basis, extra, acceleration A, acceleration B]`.
+    /// VX Ace `[basis, extra, acceleration A, acceleration B]`. MV uses the
+    /// same four and the same curve.
     pub exp_params: Option<[f64; 4]>,
     /// 8 × 100 grid of base parameters per level.
     pub params: Option<Table>,
+    /// The same curves as MV stores them: plain numbers, one row per
+    /// parameter, rather than an RGSS `Table` of 16-bit values.
+    pub param_curves: Option<Vec<Vec<i64>>>,
 }
 
 impl ClassInfo {
@@ -65,8 +87,12 @@ impl ClassInfo {
 
     /// Base value of a parameter at a level (0 = MaxHP, 1 = MaxMP, …).
     pub fn param(&self, param_id: u32, level: i64) -> Option<i64> {
+        let level = level.max(0);
+        if let Some(curves) = &self.param_curves {
+            return curves.get(param_id as usize)?.get(level as usize).copied();
+        }
         let table = self.params.as_ref()?;
-        table.get(param_id, level.max(0) as u32, 0).map(i64::from)
+        table.get(param_id, level as u32, 0).map(i64::from)
     }
 }
 
@@ -348,6 +374,7 @@ fn read_classes(heap: &Heap, value: Value) -> Vec<ClassInfo> {
                 name: heap.ivar(*v, "@name").and_then(|n| heap.string(n)).unwrap_or_default(),
                 exp_params,
                 params,
+                param_curves: None,
             }
         })
         .collect()

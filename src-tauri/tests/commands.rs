@@ -544,3 +544,217 @@ fn a_renamed_actor_keeps_its_own_name() {
     let summary: Summary = call(&webview, "summary", json!({})).expect("summary");
     assert_eq!(summary.party[0].name, "Franziska");
 }
+
+// ------------------------------------------------------------- RPG Maker MV
+
+fn open_rpgsave(webview: &WebviewWindow<MockRuntime>) -> Summary {
+    call(webview, "open_save", json!({ "path": fixture("mv_save.rpgsave") })).expect("open the save")
+}
+
+#[test]
+fn an_rpg_maker_mv_save_opens_through_the_same_commands() {
+    let webview = editor();
+    let summary = open_rpgsave(&webview);
+
+    assert_eq!(summary.engine, "mv");
+    assert_eq!(summary.engine_label, "MV");
+    assert_eq!(summary.frame_rate, 60);
+    assert_eq!(summary.max_gold, 99_999_999);
+    assert_eq!(summary.gold, Some(0));
+    assert_eq!(summary.steps, Some(32_355));
+    assert_eq!(summary.playtime_seconds, 23_204);
+    assert_eq!(summary.playtime_text, "06:26:44");
+    assert_eq!(summary.save_count, Some(65));
+    assert_eq!(summary.map_id, Some(119));
+    assert_eq!((summary.player_x, summary.player_y), (Some(38), Some(28)));
+    assert_eq!(summary.party.len(), 4);
+    assert_eq!(summary.party[0].name, "Cahara", "the save carries its own names");
+    assert_eq!(summary.party[0].hp, Some(100));
+    assert_eq!(summary.roster.len(), 23);
+    assert_eq!(summary.self_switch_count, 354);
+    // No game folder beside the fixture, so ids stay ids.
+    assert!(summary.data_loaded.is_empty());
+    assert!(!summary.dirty);
+}
+
+#[test]
+fn rpg_maker_mv_actors_are_read_and_edited() {
+    let webview = editor();
+    open_rpgsave(&webview);
+
+    let actor: ActorView = call(&webview, "get_actor", json!({ "actorId": 1 })).expect("get_actor");
+    assert_eq!(actor.name, "Cahara");
+    assert_eq!(actor.nickname.as_deref(), Some("Rhabdophobia"));
+    assert_eq!(actor.level, Some(2));
+    assert_eq!(actor.exp, Some(146));
+    assert_eq!(actor.hp, Some(100));
+    assert_eq!(actor.mp, Some(93));
+    assert_eq!(actor.mp_label, "MP");
+    assert_eq!(actor.params.len(), 8);
+    assert_eq!(actor.params[0].label, "Max HP");
+    assert_eq!(actor.equips.len(), 5);
+    assert_eq!(actor.equips[0].label, "Weapon");
+    assert_eq!(actor.equips[0].kind, "weapon", "the save marks each slot with its kind");
+    assert_eq!(actor.equips[0].item_id, 42);
+    assert_eq!(actor.skills.len(), 14);
+    assert_eq!(actor.states.len(), 1);
+    assert!(
+        actor.extra.iter().any(|f| f.ivar == "_characterName"),
+        "fields with no dedicated control are still editable"
+    );
+
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_int",
+        json!({ "actorId": 1, "ivar": "@hp", "value": 555 }),
+    )
+    .expect("set hp");
+    assert_eq!(actor.hp, Some(555));
+
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_int",
+        json!({ "actorId": 1, "ivar": actor.mp_ivar, "value": 42 }),
+    )
+    .expect("set mp");
+    assert_eq!(actor.mp, Some(42));
+
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_text",
+        json!({ "actorId": 1, "ivar": "@name", "text": "Le Marchand" }),
+    )
+    .expect("rename");
+    assert_eq!(actor.name, "Le Marchand");
+
+    // Experience is kept per class, so setting it has to find the right one.
+    let actor: ActorView =
+        call(&webview, "set_actor_exp", json!({ "actorId": 1, "exp": 9_001 })).expect("set exp");
+    assert_eq!(actor.exp, Some(9_001));
+
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_equip",
+        json!({ "actorId": 1, "slot": 1, "kind": "armor", "itemId": 7 }),
+    )
+    .expect("equip");
+    assert_eq!(actor.equips[1].item_id, 7);
+
+    let actor: ActorView = call(
+        &webview,
+        "set_actor_scalar",
+        json!({ "actorId": 1, "ivar": "_characterName", "value": { "type": "str", "value": "ghoul" } }),
+    )
+    .expect("set a plain field");
+    assert!(actor
+        .extra
+        .iter()
+        .any(|f| f.ivar == "_characterName" && f.value == Scalar::Str("ghoul".to_owned())));
+}
+
+#[test]
+fn rpg_maker_mv_inventory_switches_and_variables() {
+    let webview = editor();
+    open_rpgsave(&webview);
+
+    // MV keeps three separate tables, one per kind of thing.
+    let items: InventoryView =
+        call(&webview, "get_inventory", json!({ "kind": "item" })).expect("items");
+    assert_eq!(items.max_count, 99);
+    assert!(items.rows.iter().any(|r| r.id == 5 && r.count == 10));
+
+    let weapons: InventoryView =
+        call(&webview, "get_inventory", json!({ "kind": "weapon" })).expect("weapons");
+    assert_eq!(weapons.rows.len(), 8);
+
+    let items: InventoryView = call(
+        &webview,
+        "set_item_count",
+        json!({ "kind": "item", "id": 5, "count": 0 }),
+    )
+    .expect("drop every one of an item");
+    assert!(!items.rows.iter().any(|r| r.id == 5), "the entry goes, as in the engine");
+
+    call::<Value>(&webview, "set_switch", json!({ "id": 2, "on": true })).expect("set switch");
+    let page: SwitchPage =
+        call(&webview, "get_switch_page", json!({ "query": "", "offset": 0, "limit": 20 }))
+            .expect("switches");
+    assert!(page.rows.iter().any(|r| r.id == 2 && r.on));
+
+    call::<Value>(
+        &webview,
+        "set_variable",
+        json!({ "id": 5, "value": { "type": "int", "value": -40 } }),
+    )
+    .expect("set variable");
+    let page: VariablePage =
+        call(&webview, "get_variable_page", json!({ "query": "5", "offset": 0, "limit": 20 }))
+            .expect("variables");
+    assert!(page.rows.iter().any(|r| r.id == 5 && r.value == Scalar::Int(-40)));
+
+    let rows: Vec<rpgsave_protocol::SelfSwitchRow> =
+        call(&webview, "get_self_switches", json!({})).expect("self switches");
+    assert!(rows.iter().any(|r| r.map_id == 10 && r.event_id == 1 && r.letter == "A" && r.on));
+}
+
+#[test]
+fn the_rpg_maker_mv_json_tree_can_be_browsed_and_edited() {
+    let webview = editor();
+    open_rpgsave(&webview);
+
+    let root: NodeView = call(&webview, "raw_root", json!({})).expect("raw_root");
+    let party = root.children.iter().find(|c| c.key == "party").expect("the party");
+
+    let node: NodeView =
+        call(&webview, "raw_node", json!({ "node": party.node.unwrap() })).expect("raw_node");
+    assert_eq!(node.title, "party");
+    assert!(node.summary.starts_with("Game_Party"), "{}", node.summary);
+    let steps = node.children.iter().find(|c| c.key == "_steps").expect("steps");
+    assert_eq!(steps.scalar, Some(Scalar::Int(32_355)));
+
+    let updated: NodeView = call(
+        &webview,
+        "set_raw_scalar",
+        json!({
+            "node": party.node,
+            "slot": { "ivar": "_steps" },
+            "value": { "type": "int", "value": 123 },
+        }),
+    )
+    .expect("set_raw_scalar");
+    assert!(updated.children.iter().any(|c| c.key == "_steps" && c.preview == "123"));
+
+    let summary: Summary = call(&webview, "summary", json!({})).expect("summary");
+    assert_eq!(summary.steps, Some(123));
+
+    // The numbers the browser hands out keep meaning the same value after an
+    // edit, which is what lets the interface stay where it was.
+    let again: NodeView =
+        call(&webview, "raw_node", json!({ "node": party.node.unwrap() })).expect("raw_node again");
+    assert_eq!(again.title, "party");
+}
+
+#[test]
+fn an_edited_rpg_maker_mv_save_can_be_written_and_reopened() {
+    let webview = editor();
+    open_rpgsave(&webview);
+    call::<Summary>(&webview, "set_gold", json!({ "value": 1_234 })).expect("set gold");
+    call::<Summary>(&webview, "set_position", json!({ "x": 12, "y": 34 })).expect("move");
+
+    let target = std::env::temp_dir().join("rpgsave-command-test.rpgsave");
+    let _ = std::fs::remove_file(&target);
+    let result: WriteResult = call(
+        &webview,
+        "write_save",
+        json!({ "path": target.to_string_lossy(), "backup": false }),
+    )
+    .expect("write");
+    assert!(std::path::Path::new(&result.path).is_file());
+
+    let reopened: Summary =
+        call(&webview, "open_save", json!({ "path": target.to_string_lossy() })).expect("reopen");
+    assert_eq!(reopened.engine, "mv");
+    assert_eq!(reopened.gold, Some(1_234));
+    assert_eq!((reopened.player_x, reopened.player_y), (Some(12), Some(34)));
+    let _ = std::fs::remove_file(&target);
+}

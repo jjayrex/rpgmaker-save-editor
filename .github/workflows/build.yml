@@ -3,7 +3,7 @@ name: Build
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["[0-9]*"]
   pull_request:
   workflow_dispatch:
 
@@ -153,7 +153,7 @@ jobs:
           trunk --version
 
       - name: Build installers
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -165,7 +165,7 @@ jobs:
       # Pushing a tag such as v0.1.1 publishes a draft release with the
       # installers attached; review it on the Releases page, then publish.
       - name: Build installers and draft the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -213,7 +213,7 @@ jobs:
       # The tarball's name carries the architecture, so the two Linux jobs
       # attach distinct files. --clobber lets a re-run replace its own upload.
       - name: Attach the portable build to the draft release
-        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/v')
+        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

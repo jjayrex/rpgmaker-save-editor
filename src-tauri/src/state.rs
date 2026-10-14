@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rpgsave::lcf::LcfSave;
+use rpgsave::mv::MvSave;
 use rpgsave::marshal::{Heap, NodeKind, Value};
 use rpgsave::rpg::{Engine, GameData, SaveFile};
 use rpgsave_protocol::Scalar;
@@ -48,13 +49,18 @@ impl Editor {
 
     /// Opens whichever format the file turns out to be.
     ///
-    /// RPG Maker 2000 and 2003 saves announce themselves in their first bytes;
-    /// everything else is a Ruby Marshal stream from one of the RGSS engines.
+    /// RPG Maker 2000 and 2003 saves announce themselves in their first bytes
+    /// and MV saves are base64 text; everything else is a Ruby Marshal stream
+    /// from one of the RGSS engines.
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
 
         let save: Box<dyn Backend> = if LcfSave::looks_like_save(&bytes) {
             let mut save = LcfSave::from_bytes(&bytes).map_err(|e| e.to_string())?;
+            save.path = path.to_path_buf();
+            Box::new(save)
+        } else if MvSave::looks_like_save(&bytes) {
+            let mut save = MvSave::from_bytes(&bytes).map_err(|e| e.to_string())?;
             save.path = path.to_path_buf();
             Box::new(save)
         } else {
