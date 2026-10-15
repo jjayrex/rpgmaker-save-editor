@@ -1,19 +1,21 @@
-//! RPG Maker MV behind the common interface.
+//! RPG Maker MV and MZ behind the common interface.
 //!
-//! MV is the first engine here that is not Ruby, but the editor's model of a
-//! save fits it almost unchanged: the ids, counters and tables mean the same
-//! things under JavaScript names. What differs is named below — MV holds
-//! experience per class, marks each equipped thing with what kind it is, and
-//! keeps its database as JSON beside the save.
+//! These are the engines that are not Ruby, but the editor's model of a save
+//! fits them almost unchanged: the ids, counters and tables mean the same
+//! things under JavaScript names. What differs is named below — both hold
+//! experience per class, mark each equipped thing with what kind it is, and
+//! keep their database as JSON beside the save. The two are the same from
+//! here up; only the compression tells them apart, so the engine a summary
+//! reports comes from the container the save was packed in.
 
 use std::path::{Path, PathBuf};
 
-use rpgsave::mv::database;
-use rpgsave::mv::json::Json;
-use rpgsave::mv::save::{
+use rpgsave::js::database;
+use rpgsave::js::json::Json;
+use rpgsave::js::save::{
     actor as field, EQUIP_SLOTS, FRAME_RATE, MAX_GOLD, MAX_ITEM_COUNT, PARAMS,
 };
-use rpgsave::mv::MvSave;
+use rpgsave::js::JsonSave;
 use rpgsave::rpg::gamedata::{ClassInfo, Entry};
 use rpgsave::rpg::{format_playtime, GameData, ItemKind};
 use rpgsave_protocol::*;
@@ -68,7 +70,7 @@ fn field_key(name: &str) -> String {
 
 /// An actor's name as the save has it; the save always carries one, because
 /// the engine copies it from the database when the actor is created.
-fn actor_label(save: &MvSave, data: Option<&GameData>, id: i64) -> String {
+fn actor_label(save: &JsonSave, data: Option<&GameData>, id: i64) -> String {
     save.actor_text(id, field::NAME)
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
@@ -77,7 +79,7 @@ fn actor_label(save: &MvSave, data: Option<&GameData>, id: i64) -> String {
 }
 
 fn class_of<'a>(
-    save: &MvSave,
+    save: &JsonSave,
     data: Option<&'a GameData>,
     id: i64,
 ) -> Option<&'a ClassInfo> {
@@ -85,12 +87,12 @@ fn class_of<'a>(
 }
 
 /// A parameter's base value at an actor's level, from the class curve.
-fn param_base(save: &MvSave, data: Option<&GameData>, id: i64, index: usize) -> Option<i64> {
+fn param_base(save: &JsonSave, data: Option<&GameData>, id: i64, index: usize) -> Option<i64> {
     let level = save.actor_int(id, field::LEVEL)?;
     class_of(save, data, id)?.param(index as u32, level)
 }
 
-fn max_param(save: &MvSave, data: Option<&GameData>, id: i64, index: usize) -> Option<i64> {
+fn max_param(save: &JsonSave, data: Option<&GameData>, id: i64, index: usize) -> Option<i64> {
     let base = param_base(save, data, id, index)?;
     Some(base + save.actor_param_plus(id, index).unwrap_or(0))
 }
@@ -138,7 +140,7 @@ fn json_of(value: &Scalar) -> Option<Json> {
     }
 }
 
-impl Backend for MvSave {
+impl Backend for JsonSave {
     fn path(&self) -> &Path {
         &self.path
     }
@@ -157,7 +159,7 @@ impl Backend for MvSave {
 
     fn encode(&mut self) -> Vec<u8> {
         self.dirty = false;
-        MvSave::to_bytes(self)
+        JsonSave::to_bytes(self)
     }
 
     fn byte_size(&self) -> usize {
@@ -211,8 +213,8 @@ impl Backend for MvSave {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            engine: "mv".to_owned(),
-            engine_label: "MV".to_owned(),
+            engine: self.container.engine().to_owned(),
+            engine_label: self.container.label().to_owned(),
             dirty: self.dirty,
             file_size: self.size_bytes,
             document_count: 1,
@@ -492,7 +494,7 @@ impl Backend for MvSave {
     }
 
     fn self_switches(&self, data: Option<&GameData>) -> Vec<SelfSwitchRow> {
-        MvSave::self_switches(self)
+        JsonSave::self_switches(self)
             .into_iter()
             .map(|(map_id, event_id, letter, on)| SelfSwitchRow {
                 map_id,
@@ -505,27 +507,27 @@ impl Backend for MvSave {
     }
 
     fn raw_root(&self) -> NodeView {
-        crate::views_mv::raw_root(self)
+        crate::views_js::raw_root(self)
     }
 
     fn raw_node(&self, node: u32) -> Option<NodeView> {
-        crate::views_mv::raw_node(self, node)
+        crate::views_js::raw_node(self, node)
     }
 
     fn set_raw_scalar(&mut self, node: Option<u32>, slot: &Slot, value: &Scalar) -> Reply<()> {
-        crate::views_mv::set_raw_scalar(self, node, slot, value)
+        crate::views_js::set_raw_scalar(self, node, slot, value)
     }
 
     fn set_gold(&mut self, value: i64) -> bool {
-        MvSave::set_gold(self, value)
+        JsonSave::set_gold(self, value)
     }
 
     fn set_steps(&mut self, value: i64) -> bool {
-        MvSave::set_steps(self, value)
+        JsonSave::set_steps(self, value)
     }
 
     fn set_playtime_seconds(&mut self, seconds: i64) -> bool {
-        MvSave::set_playtime_seconds(self, seconds)
+        JsonSave::set_playtime_seconds(self, seconds)
     }
 
     fn set_position(&mut self, x: i64, y: i64) -> bool {
@@ -576,7 +578,7 @@ impl Backend for MvSave {
     }
 
     fn set_actor_exp(&mut self, actor_id: i64, exp: i64) -> bool {
-        MvSave::set_actor_exp(self, actor_id, exp)
+        JsonSave::set_actor_exp(self, actor_id, exp)
     }
 
     fn set_actor_param(&mut self, actor_id: i64, index: usize, value: i64) -> bool {
@@ -588,11 +590,11 @@ impl Backend for MvSave {
     }
 
     fn set_actor_skills(&mut self, actor_id: i64, ids: &[i64]) -> bool {
-        MvSave::set_actor_skills(self, actor_id, ids)
+        JsonSave::set_actor_skills(self, actor_id, ids)
     }
 
     fn set_actor_states(&mut self, actor_id: i64, ids: &[i64]) -> bool {
-        MvSave::set_actor_states(self, actor_id, ids)
+        JsonSave::set_actor_states(self, actor_id, ids)
     }
 
     fn full_heal(&mut self, actor_id: i64, data: Option<&GameData>) -> bool {
@@ -602,28 +604,28 @@ impl Backend for MvSave {
         let mp = max_param(self, data, actor_id, 1).unwrap_or(9_999);
         let healed = self.set_actor_field(actor_id, field::HP, Json::int(hp))
             && self.set_actor_field(actor_id, field::MP, Json::int(mp));
-        healed && MvSave::set_actor_states(self, actor_id, &[])
+        healed && JsonSave::set_actor_states(self, actor_id, &[])
     }
 
     fn set_item_count(&mut self, kind: &str, id: i64, count: i64) -> bool {
         let Some(kind) = item_kind(kind) else { return false };
-        MvSave::set_item_count(self, kind, id, count)
+        JsonSave::set_item_count(self, kind, id, count)
     }
 
     fn set_switch(&mut self, id: i64, on: bool) -> bool {
-        MvSave::set_switch(self, id, on)
+        JsonSave::set_switch(self, id, on)
     }
 
     fn set_variable(&mut self, id: i64, value: &Scalar) -> bool {
         let Some(value) = json_of(value) else { return false };
-        MvSave::set_variable(self, id, value)
+        JsonSave::set_variable(self, id, value)
     }
 
     fn set_self_switch(&mut self, map_id: i64, event_id: i64, letter: &str, on: bool) -> bool {
-        MvSave::set_self_switch(self, map_id, event_id, letter, on)
+        JsonSave::set_self_switch(self, map_id, event_id, letter, on)
     }
 
     fn remove_self_switch(&mut self, map_id: i64, event_id: i64, letter: &str) -> bool {
-        MvSave::remove_self_switch(self, map_id, event_id, letter)
+        JsonSave::remove_self_switch(self, map_id, event_id, letter)
     }
 }

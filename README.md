@@ -10,6 +10,7 @@ Currently supports:
 - **RPG Maker XP** (`.rxdata`)
 - **RPG Maker 2000 and 2003** (`.lsd`)
 - **RPG Maker MV** (`.rpgsave`)
+- **RPG Maker MZ** (`.rmmzsave`)
 
 ## What it can edit
 
@@ -27,7 +28,7 @@ If the game's database is readable, ids are resolved to names — items, skills,
 states, classes, maps, switches and variables. Each engine keeps it somewhere
 different, and the editor looks for all of them: `Data/*.rvdata2` and its
 siblings for the RGSS engines, `RPG_RT.ldb` for 2000 and 2003, and `data/*.json`
-for MV.
+for MV and MZ.
 
 RPG Maker 2000 and 2003 predate RGSS and share a different format entirely —
 LCF, a tree of binary chunks rather than a Ruby object graph. Both engines write
@@ -41,17 +42,28 @@ self switches, nicknames or TP, and one table holds everything carried — the
 Items, Weapons and Armours tabs are filled by what the database says each entry
 is.
 
-RPG Maker MV left Ruby behind for JavaScript, so a `.rpgsave` is the game's
-objects written as JSON by the engine's own `JsonEx`, compressed with lz-string
-and stored as base64 text. Both of those are implemented here rather than
-depended on: the compression is a port of lz-string, and the JSON parser keeps
-every member in the engine's order and replays the original text of every value
-it was not asked to change, so a save the editor has not edited is written back
-byte for byte. `JsonEx`'s own bookkeeping — the `@` class name an object is
-rebuilt from, the `@c` identity and the `@r` back-reference — is passed through
-untouched. MV holds experience per class rather than per actor, and marks each
-equipped thing with whether it is a weapon or a piece of armour, so the editor
-follows the save rather than guessing from the slot.
+RPG Maker MV and MZ left Ruby behind for JavaScript, so a save is the game's
+objects written as JSON by the engine's own `JsonEx`. They store the same
+fields under the same names, and one model serves both; what differs is the
+wrapper. MV compresses with lz-string and writes base64 text, which is ported
+here rather than depended on. MZ deflates instead, and hands pako's output to
+a function that writes a string — so every byte above 0x7F reaches the file as
+two, and reading one back means taking the low byte of each character. DEFLATE
+itself is a standard format rather than one of the engine's own, so that part
+is left to `miniz_oxide`, which this project already builds.
+
+The JSON parser keeps every member in the engine's order and replays the
+original text of every value it was not asked to change, so a save the editor
+has not edited is written back byte for byte — which also sidesteps the fact
+that no two compressors agree on their exact output. An edited MZ save is
+re-deflated, and comes out smaller than the game's own, which compresses for
+speed. `JsonEx`'s bookkeeping is passed through untouched: the `@` class name
+an object is rebuilt from, and in MV also the `@c` identity and `@r`
+back-reference that MZ dropped. Both engines hold experience per class rather
+than per actor, and mark each equipped thing with whether it is a weapon or a
+piece of armour, so the editor follows the save rather than guessing from the
+slot — this is how it handles a game that gives its actors more than the five
+slots the engine ships with.
 
 The engines differ in more than their file extension, and the editor follows
 each one: XP counts play time at 40 frames a second rather than 60, calls the
@@ -90,3 +102,19 @@ cargo tauri build      # produce installers
   without installing anything. Everything the app needs is compiled in except
   the system webview: WebView2 on Windows (part of Windows 10 and 11), and
   WebKitGTK on Linux (`webkit2gtk-4.1`, which your distribution provides).
+
+Every download is named `rpgmaker-save-editor-<platform>-<arch>`, so a release
+holds:
+
+| File | What it is |
+| --- | --- |
+| `rpgmaker-save-editor-win-x86_64.exe` | Portable, run from anywhere |
+| `rpgmaker-save-editor-win-x86_64-setup.exe` | Installer |
+| `rpgmaker-save-editor-win-x86_64-setup.msi` | The same through Windows Installer |
+| `rpgmaker-save-editor-linux-x86_64.tar.gz` | Portable |
+| `rpgmaker-save-editor-linux-aarch64.tar.gz` | Portable |
+| `rpgmaker-save-editor-linux-x86_64.deb` | Debian and Ubuntu |
+| `rpgmaker-save-editor-linux-aarch64.deb` | Debian and Ubuntu |
+
+Pushing a tag — the bare version, `1.2.3` rather than `v1.2.3` — drafts a
+release with all of them attached, once every build has succeeded.

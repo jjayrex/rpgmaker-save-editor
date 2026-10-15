@@ -24,8 +24,9 @@ pub fn pick_save_file<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Reply<Opti
 /// What RPG Maker 2000 and 2003 call their saves.
 const LCF_EXTENSION: &str = "lsd";
 
-/// What RPG Maker MV calls its saves.
+/// What RPG Maker MV and MZ call their saves.
 const MV_EXTENSION: &str = "rpgsave";
+const MZ_EXTENSION: &str = "rmmzsave";
 
 /// Filters for the open dialog: every supported save first, so the default
 /// view shows all of them, then one per engine.
@@ -36,6 +37,7 @@ fn save_file_filters() -> Vec<(String, Vec<&'static str>)> {
     let mut every: Vec<&'static str> = Engine::ALL.iter().map(|e| e.save_extension()).collect();
     every.push(LCF_EXTENSION);
     every.push(MV_EXTENSION);
+    every.push(MZ_EXTENSION);
     let mut filters = vec![("RPG Maker save".to_owned(), every)];
     filters.extend(
         Engine::ALL
@@ -44,6 +46,7 @@ fn save_file_filters() -> Vec<(String, Vec<&'static str>)> {
     );
     filters.push(("2000/2003 save".to_owned(), vec![LCF_EXTENSION]));
     filters.push(("MV save".to_owned(), vec![MV_EXTENSION]));
+    filters.push(("MZ save".to_owned(), vec![MZ_EXTENSION]));
     filters.push(("All files".to_owned(), vec!["*"]));
     filters
 }
@@ -522,6 +525,8 @@ mod tests {
         );
         assert!(combined.contains(&MV_EXTENSION), "RPG Maker MV saves are missing");
         assert!(filters.iter().any(|(name, ext)| name.contains("MV") && ext == &[MV_EXTENSION]));
+        assert!(combined.contains(&MZ_EXTENSION), "RPG Maker MZ saves are missing");
+        assert!(filters.iter().any(|(name, ext)| name.contains("MZ") && ext == &[MZ_EXTENSION]));
         assert_eq!(filters.last().map(|(name, _)| name.as_str()), Some("All files"));
     }
 }

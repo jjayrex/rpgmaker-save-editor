@@ -758,3 +758,68 @@ fn an_edited_rpg_maker_mv_save_can_be_written_and_reopened() {
     assert_eq!((reopened.player_x, reopened.player_y), (Some(12), Some(34)));
     let _ = std::fs::remove_file(&target);
 }
+
+// ------------------------------------------------------------- RPG Maker MZ
+
+fn open_rmmzsave(webview: &WebviewWindow<MockRuntime>) -> Summary {
+    call(webview, "open_save", json!({ "path": fixture("mz_save.rmmzsave") }))
+        .expect("open the save")
+}
+
+/// MZ shares everything above the container with MV, so what matters here is
+/// that a differently packed file arrives at the same interface.
+#[test]
+fn an_rpg_maker_mz_save_opens_through_the_same_commands() {
+    let webview = editor();
+    let summary = open_rmmzsave(&webview);
+
+    assert_eq!(summary.engine, "mz");
+    assert_eq!(summary.engine_label, "MZ");
+    assert_eq!(summary.frame_rate, 60);
+    assert_eq!(summary.gold, Some(0));
+    assert_eq!(summary.steps, Some(28));
+    assert_eq!(summary.playtime_text, "00:04:44");
+    assert_eq!(summary.map_id, Some(32));
+    assert_eq!((summary.player_x, summary.player_y), (Some(26), Some(6)));
+    assert_eq!(summary.party.len(), 2);
+    assert_eq!(summary.party[0].name, "Ziedrick");
+    assert_eq!(summary.self_switch_count, 31);
+    assert!(summary.notes.is_empty());
+    assert!(!summary.dirty);
+
+    let actor: ActorView = call(&webview, "get_actor", json!({ "actorId": 11 })).expect("get_actor");
+    assert_eq!(actor.level, Some(6));
+    assert_eq!(actor.exp, Some(1_250));
+    assert_eq!(actor.mp_label, "MP");
+    assert_eq!(actor.equips.len(), 7, "this game adds slots of its own");
+
+    let root: NodeView = call(&webview, "raw_root", json!({})).expect("raw_root");
+    assert!(root.summary.contains("MZ"), "{}", root.summary);
+    assert!(
+        root.children.iter().any(|c| c.key == "cgmz"),
+        "a plugin's own section is there to browse"
+    );
+}
+
+#[test]
+fn an_edited_rpg_maker_mz_save_can_be_written_and_reopened() {
+    let webview = editor();
+    open_rmmzsave(&webview);
+    call::<Summary>(&webview, "set_gold", json!({ "value": 4_242 })).expect("set gold");
+
+    let target = std::env::temp_dir().join("rpgsave-command-test.rmmzsave");
+    let _ = std::fs::remove_file(&target);
+    let result: WriteResult = call(
+        &webview,
+        "write_save",
+        json!({ "path": target.to_string_lossy(), "backup": false }),
+    )
+    .expect("write");
+    assert!(std::path::Path::new(&result.path).is_file());
+
+    let reopened: Summary =
+        call(&webview, "open_save", json!({ "path": target.to_string_lossy() })).expect("reopen");
+    assert_eq!(reopened.engine, "mz", "written back in the form it came in");
+    assert_eq!(reopened.gold, Some(4_242));
+    let _ = std::fs::remove_file(&target);
+}

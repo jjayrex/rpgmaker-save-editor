@@ -1,14 +1,14 @@
-//! Prints what the editor reads out of an RPG Maker MV save, and checks that
-//! it re-encodes to the bytes it came from.
+//! Prints what the editor reads out of an RPG Maker MV or MZ save, and checks
+//! that it re-encodes to the bytes it came from.
 //!
-//!     cargo run -p rpgsave --example mv -- path/to/file1.rpgsave
-use rpgsave::mv::save::{actor, ItemKind};
-use rpgsave::mv::{database, MvSave};
+//!     cargo run -p rpgsave --example jsonsave -- path/to/file1.rpgsave
+use rpgsave::js::save::{actor, ItemKind};
+use rpgsave::js::{database, JsonSave};
 
 fn main() {
     let path = std::env::args().nth(1).expect("usage: mv <file.rpgsave>");
     let path = std::path::Path::new(&path);
-    let save = match MvSave::open(path) {
+    let save = match JsonSave::open(path) {
         Ok(save) => save,
         Err(e) => {
             eprintln!("{e}");

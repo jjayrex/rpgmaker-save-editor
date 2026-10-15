@@ -80,7 +80,7 @@ jobs:
     # Pull requests get the tests; building installers for them is wasted time.
     if: github.event_name != 'pull_request'
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -94,25 +94,26 @@ jobs:
           # host's own WebKit instead, which works everywhere it is installed.
           - os: ubuntu-22.04
             name: Linux x86_64
+            platform: linux
             arch: x86_64
             bundles: deb
             trunk_asset: trunk-x86_64-unknown-linux-gnu.tar.gz
-            portable_artifact: linux-x86_64-portable
           # Built natively on GitHub's Arm runner rather than cross-compiled:
           # cross-compiling would need an arm64 sysroot of WebKitGTK and all
           # its dependencies, where the native runner just installs them with
           # apt. 22.04 for the same glibc reason as above.
           - os: ubuntu-22.04-arm
             name: Linux AArch64
+            platform: linux
             arch: aarch64
             bundles: deb
             trunk_asset: trunk-aarch64-unknown-linux-gnu.tar.gz
-            portable_artifact: linux-aarch64-portable
           - os: windows-latest
-            name: Windows
+            name: Windows x86_64
+            platform: win
+            arch: x86_64
             bundles: nsis,msi
             trunk_asset: trunk-x86_64-pc-windows-msvc.zip
-            portable_artifact: windows-x86_64-portable
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -153,71 +154,107 @@ jobs:
           trunk --version
 
       - name: Build installers
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: --bundles ${{ matrix.bundles }}
-          uploadWorkflowArtifacts: true
+          # The bundler names its output after the product and version, which
+          # differs per bundle and per platform. Everything is renamed and
+          # uploaded below instead, so that every download — whether from a
+          # release or from a run's artifacts — follows one pattern:
+          # rpgmaker-save-editor-<platform>-<arch>[-setup].<ext>
+          uploadWorkflowArtifacts: false
           uploadUpdaterJson: false
 
-      # Pushing a tag such as v0.1.1 publishes a draft release with the
-      # installers attached; review it on the Releases page, then publish.
-      - name: Build installers and draft the release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --bundles ${{ matrix.bundles }}
-          uploadWorkflowArtifacts: true
-          tagName: ${{ github.ref_name }}
-          releaseName: RPG Maker Save Editor ${{ github.ref_name }}
-          releaseBody: |
-            Editor for RPG Maker VX, VX Ace and XP save files.
-
-            - **Windows**: `.exe` installer, or the `.msi` package.
-            - **Linux**: `.deb` for Debian and Ubuntu (`amd64` for x86_64, `arm64` for AArch64), or the portable `.tar.gz` for other distributions, which uses the system's own WebKitGTK 4.1.
-          releaseDraft: true
-          uploadUpdaterJson: false
-          # Windows only. On Linux the executable would be named the same for
-          # both architectures, so the two jobs would collide on the release,
-          # and a bare file downloaded from a release loses its executable bit
-          # anyway. Linux gets the portable tarball instead, attached below.
-          uploadPlainBinary: ${{ runner.os == 'Windows' }}
-
-      # The executable on its own: everything the app needs is compiled into
-      # it, apart from the system webview (WebView2 on Windows, WebKitGTK on
-      # Linux). No installer, nothing written outside the folder it sits in.
-      - name: Collect the portable build
+      - name: Name the builds
         shell: bash
+        env:
+          BASE: rpgmaker-save-editor-${{ matrix.platform }}-${{ matrix.arch }}
         run: |
           set -euo pipefail
-          mkdir -p portable
+          shopt -s nullglob
+          mkdir -p assets
+
+          # Takes the one file a pattern matches. Finding none or several means
+          # the bundler changed its output, and stopping here is better than a
+          # release that is quietly missing a download.
+          take() {
+            dest=$1
+            shift
+            if [ "$#" -ne 1 ]; then
+              echo "::error::expected one file for $dest, found $#: $*"
+              exit 1
+            fi
+            cp "$1" "assets/$dest"
+          }
+
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cp target/release/rpgmaker-save-editor.exe portable/
+            # The executable on its own: everything the app needs is compiled
+            # into it, apart from the system webview (WebView2 here, WebKitGTK
+            # on Linux). No installer, nothing written outside its own folder.
+            take "$BASE.exe" target/release/rpgmaker-save-editor.exe
+            take "$BASE-setup.exe" target/release/bundle/nsis/*-setup.exe
+            take "$BASE-setup.msi" target/release/bundle/msi/*.msi
           else
-            # A tarball, because a zipped artifact loses the executable bit.
-            tar -czf "portable/rpgmaker-save-editor-linux-${{ matrix.arch }}.tar.gz" \
-              -C target/release rpgmaker-save-editor
+            # A tarball, because a bare file downloaded from a release loses
+            # its executable bit.
+            tar -czf "assets/$BASE.tar.gz" -C target/release rpgmaker-save-editor
+            take "$BASE.deb" target/release/bundle/deb/*.deb
           fi
-          ls -l portable/
+          ls -l assets/
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.portable_artifact }}
-          path: portable/*
+          name: rpgmaker-save-editor-${{ matrix.platform }}-${{ matrix.arch }}
+          path: assets/*
           if-no-files-found: error
 
-      # The tarball's name carries the architecture, so the two Linux jobs
-      # attach distinct files. --clobber lets a re-run replace its own upload.
-      - name: Attach the portable build to the draft release
-        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/')
+  # Pushing a tag such as 1.2.3 drafts a release with every build attached;
+  # review it on the Releases page, then publish. Nothing is attached until all
+  # of the jobs above have succeeded, so a release is never half built.
+  release:
+    name: Draft the release
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Attach the builds to a draft release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release upload "$GITHUB_REF_NAME" portable/*.tar.gz \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          # One folder per job on the way in, and the names inside them are
+          # already the ones the release should carry.
+          mkdir -p assets
+          find artifacts -type f -exec cp {} assets/ \;
+          ls -l assets/
+          if [ -z "$(ls -A assets)" ]; then
+            echo "::error::the build jobs produced nothing to release"
+            exit 1
+          fi
+
+          cat > notes.md <<'EOF'
+          Editor for RPG Maker 2000, 2003, XP, VX, VX Ace, MV and MZ save files.
+
+          - **Windows**: `-setup.exe` to install, `-setup.msi` for the same through Windows Installer, or the plain `.exe` to run from wherever you put it.
+          - **Linux**: `.deb` for Debian and Ubuntu, or the portable `.tar.gz` for other distributions, which uses the system's own WebKitGTK 4.1.
+          EOF
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Re-running a tag replaces the files it uploaded last time.
+            gh release upload "$GITHUB_REF_NAME" assets/* \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" assets/* \
+              --repo "$GITHUB_REPOSITORY" --draft \
+              --title "RPG Maker Save Editor $GITHUB_REF_NAME" \
+              --notes-file notes.md
+          fi

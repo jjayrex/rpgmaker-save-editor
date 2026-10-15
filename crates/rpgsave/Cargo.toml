@@ -1,13 +1,16 @@
 [package]
 name = "rpgsave"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
-description = "Ruby Marshal (4.8) codec and RPG Maker MV/XP/VX/VX Ace save-game model"
+description = "Ruby Marshal (4.8) codec and RPG Maker MZ/MV/XP/VX/VX Ace save-game model"
 license.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 encoding_rs = "0.8"
+# RPG Maker MZ deflates its saves. That is a standard format rather than one of
+# the engine's own, and this is the implementation Tauri already builds.
+miniz_oxide = "0.8"
 
 [dev-dependencies]
 serde_json = "1"

@@ -1,23 +1,27 @@
-//! RPG Maker MV save files (`fileNN.rpgsave`).
+//! RPG Maker MV and MZ save files (`fileNN.rpgsave`, `fileNN.rmmzsave`).
 //!
-//! Where the RGSS engines dump a Ruby object graph, MV writes the same game
-//! objects as JSON through its own `JsonEx`, then compresses the text. The
-//! shape is otherwise familiar: one member per global (`$gameParty` is
+//! Where the RGSS engines dump a Ruby object graph, these write the same game
+//! objects as JSON through the engine's own `JsonEx`, then compress the text.
+//! The shape is otherwise familiar: one member per global (`$gameParty` is
 //! `party`, `$gameActors` is `actors`), each holding the engine's own private
 //! fields under their JavaScript names.
 //!
-//! `JsonEx` adds three members of its own, which this editor passes through
-//! untouched: `@` names the class an object is rebuilt as, `@c` gives it an
-//! identity, and `@r` refers back to one. Arrays are wrapped in an object so
-//! that they can carry an identity too, which is why reading an array here
-//! goes through [`Json::elements`].
+//! The two engines store the same fields, so one model serves both and the
+//! difference is the wrapper the text arrives in — see [`Container`].
+//!
+//! `JsonEx` adds members of its own, which this editor passes through
+//! untouched: `@` names the class an object is rebuilt as, and in MV also
+//! `@c` for an object's identity and `@r` for a reference back to one. MV
+//! wraps an array in an object so that it can carry an identity too, which is
+//! why reading an array here goes through [`Json::elements`]; MZ dropped all
+//! that and writes plain arrays.
 
 use std::path::{Path, PathBuf};
 
 use std::cell::RefCell;
 
 use super::json::{self, Json, ParseError, Step};
-use super::lzstring;
+use super::{lzstring, zlib};
 
 /// Members at the top level, as `DataManager.makeSaveContents` writes them.
 pub mod top {
@@ -98,12 +102,45 @@ pub const PARAMS: [&str; 8] =
 /// to name the game's own.
 pub const EQUIP_SLOTS: [&str; 5] = ["Weapon", "Shield", "Head", "Body", "Accessory"];
 
+/// How a save's JSON was packed, which is the one thing the two engines do
+/// differently — and so also how the editor tells which engine wrote a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Container {
+    /// MV: lz-string, written as base64 text.
+    LzString,
+    /// MZ: DEFLATE, written one character per byte.
+    Zlib,
+}
+
+impl Container {
+    pub fn engine(self) -> &'static str {
+        match self {
+            Container::LzString => "mv",
+            Container::Zlib => "mz",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Container::LzString => "MV",
+            Container::Zlib => "MZ",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Container::LzString => "rpgsave",
+            Container::Zlib => "rmmzsave",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum OpenError {
     Io(std::io::Error),
-    NotBase64,
+    NotPacked,
     NotCompressed,
-    LooksLikeMz,
+    Corrupt,
     Json(ParseError),
     NotASave { found: Vec<String> },
 }
@@ -112,24 +149,26 @@ impl std::fmt::Display for OpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OpenError::Io(e) => write!(f, "{e}"),
-            OpenError::NotBase64 => {
-                write!(f, "This is not an RPG Maker MV save: the file is not base64 text.")
-            }
+            OpenError::NotPacked => write!(
+                f,
+                "This is not an RPG Maker MV or MZ save: it is neither base64 text, as MV \
+                 writes, nor a deflated stream, as MZ writes."
+            ),
             OpenError::NotCompressed => write!(
                 f,
                 "This file is base64 but not an RPG Maker MV save: it does not unpack as \
                  lz-string, which is what MV compresses its saves with."
             ),
-            OpenError::LooksLikeMz => write!(
+            OpenError::Corrupt => write!(
                 f,
-                "This looks like an RPG Maker MZ save: it is base64 of a zlib stream, which is \
-                 how MZ stores one, rather than the lz-string MV uses. MZ is not supported yet."
+                "This looks like an RPG Maker MZ save, but the compressed data inside it is \
+                 damaged and does not unpack."
             ),
             OpenError::Json(e) => write!(f, "The save unpacked but its contents are not JSON: {e}"),
             OpenError::NotASave { found } => write!(
                 f,
-                "This is an RPG Maker MV file but not a save slot: it holds {} rather than a \
-                 party and its actors. `global.rpgsave` and `config.rpgsave` are the game's own \
+                "This is an RPG Maker MV or MZ file but not a save slot: it holds {} rather \
+                 than a party and its actors. `global` and `config` are the game's own \
                  bookkeeping, not savegames.",
                 if found.is_empty() { "nothing".to_owned() } else { found.join(", ") }
             ),
@@ -139,19 +178,22 @@ impl std::fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
-/// A decoded `.rpgsave`.
-pub struct MvSave {
+/// A decoded MV or MZ save.
+pub struct JsonSave {
     pub path: PathBuf,
     pub size_bytes: usize,
     pub dirty: bool,
     pub notes: Vec<String>,
     /// The save's contents, which is what every method here reads and writes.
     pub root: Json,
+    /// How this one was packed, and how it will be packed again.
+    pub container: Container,
     /// The file as it was read, and the text that came out of it.
     ///
-    /// Compressing is not quite canonical — the tools people edit these saves
-    /// with pad the last byte differently from the game — so a save that comes
-    /// out of the editor unchanged is written back as the bytes it arrived as,
+    /// Neither compression is canonical: the tools people edit MV saves with
+    /// pad the last byte differently from the game, and nothing reproduces
+    /// another deflate implementation's exact output. So a save that comes out
+    /// of the editor unchanged is written back as the bytes it arrived as,
     /// rather than as a re-compression that would differ for no reason.
     original_text: String,
     original_bytes: Vec<u8>,
@@ -164,31 +206,49 @@ pub struct MvSave {
     browse: RefCell<Vec<Vec<Step>>>,
 }
 
-impl MvSave {
-    pub fn open(path: &Path) -> Result<MvSave, OpenError> {
+impl JsonSave {
+    pub fn open(path: &Path) -> Result<JsonSave, OpenError> {
         let bytes = std::fs::read(path).map_err(OpenError::Io)?;
-        let mut save = MvSave::from_bytes(&bytes)?;
+        let mut save = JsonSave::from_bytes(&bytes)?;
         save.path = path.to_path_buf();
         Ok(save)
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<MvSave, OpenError> {
-        let text = std::str::from_utf8(bytes).map_err(|_| OpenError::NotBase64)?;
-        if !lzstring::looks_like_base64(text) {
-            return Err(OpenError::NotBase64);
-        }
-        // MV's successor writes the same kind of file with a different
-        // compression, and is worth telling apart by name. This is checked
-        // before unpacking because lz-string will happily turn any base64
-        // into some string or other; only the JSON inside says it was a save.
-        if looks_like_zlib(text) {
-            return Err(OpenError::LooksLikeMz);
-        }
-        let payload = lzstring::decompress_from_base64(text).ok_or(OpenError::NotCompressed)?;
+    pub fn from_bytes(bytes: &[u8]) -> Result<JsonSave, OpenError> {
+        let mut notes = Vec::new();
+        let (container, payload) = match std::str::from_utf8(bytes) {
+            // MV: base64 and nothing else.
+            Ok(text) if lzstring::looks_like_base64(text) => (
+                Container::LzString,
+                lzstring::decompress_from_base64(text).ok_or(OpenError::NotCompressed)?,
+            ),
+            _ if zlib::looks_like_stream(bytes) => {
+                let unpacked = zlib::from_text(bytes)
+                    .filter(|stream| zlib::looks_like_zlib(stream))
+                    .and_then(|stream| zlib::inflate(&stream))
+                    .or_else(|| {
+                        // Not the engine's own text form. Some tools write the
+                        // stream as plain bytes, which the engine cannot read
+                        // back; saving will put that right.
+                        let unpacked = zlib::inflate(bytes)?;
+                        notes.push(
+                            "This file holds its compressed data as raw bytes rather than as \
+                             the text the engine writes, which the game cannot read. Saving \
+                             will write it the way the engine does."
+                                .to_owned(),
+                        );
+                        Some(unpacked)
+                    })
+                    .ok_or(OpenError::Corrupt)?;
+                let payload = String::from_utf8(unpacked).map_err(|_| OpenError::Corrupt)?;
+                (Container::Zlib, payload)
+            }
+            _ => return Err(OpenError::NotPacked),
+        };
         let root = json::parse(&payload).map_err(OpenError::Json)?;
 
-        // `global.rpgsave` and `config.rpgsave` are the same format without
-        // any game state in them, and are worth telling apart by name.
+        // `global` and `config` are the same format without any game state in
+        // them, and are worth telling apart by name.
         if root.get(top::PARTY).is_none() || root.get(top::ACTORS).is_none() {
             let found = root
                 .members()
@@ -202,25 +262,28 @@ impl MvSave {
             return Err(OpenError::NotASave { found });
         }
 
-        Ok(MvSave {
+        Ok(JsonSave {
             path: PathBuf::new(),
             size_bytes: bytes.len(),
             dirty: false,
-            notes: Vec::new(),
+            notes,
             root,
+            container,
             original_text: payload,
             original_bytes: bytes.to_vec(),
             browse: RefCell::new(Vec::new()),
         })
     }
 
-    /// True for a file that is nothing but base64, which is all MV writes.
+    /// True for a file packed the way one of these engines packs a save:
+    /// base64 throughout, or a deflated stream.
     ///
-    /// A Ruby `Marshal` stream starts with two bytes that are not base64, and
-    /// an LCF save with a length byte, so this is enough to tell the formats
+    /// A Ruby `Marshal` stream starts with two bytes that are neither, and an
+    /// LCF save with a length byte, so this is enough to tell the formats
     /// apart before committing to unpacking one.
     pub fn looks_like_save(bytes: &[u8]) -> bool {
         std::str::from_utf8(bytes).is_ok_and(lzstring::looks_like_base64)
+            || zlib::looks_like_stream(bytes)
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -228,7 +291,10 @@ impl MvSave {
         if text == self.original_text {
             return self.original_bytes.clone();
         }
-        lzstring::compress_to_base64(&text).into_bytes()
+        match self.container {
+            Container::LzString => lzstring::compress_to_base64(&text).into_bytes(),
+            Container::Zlib => zlib::to_text(&zlib::deflate(text.as_bytes())),
+        }
     }
 
     /// The JSON the save holds, for callers that want to look at it whole.
@@ -674,13 +740,6 @@ impl MvSave {
         equip.set(item::DATA_CLASS, Json::text(kind));
         equip.set(item::ITEM_ID, Json::int(item_id.max(0)))
     }
-}
-
-/// True for base64 that stands for a zlib stream, which is how RPG Maker MZ
-/// compresses a save.
-fn looks_like_zlib(text: &str) -> bool {
-    // A zlib header is 0x78 and one of four second bytes, by compression level.
-    matches!(lzstring::first_bytes(text), Some([0x78, 0x01 | 0x5E | 0x9C | 0xDA, _]))
 }
 
 /// The three tables a party carries things in.

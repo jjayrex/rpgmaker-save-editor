@@ -1,11 +1,11 @@
-//! Browsing the JSON tree of an RPG Maker MV save.
+//! Browsing the JSON tree of an RPG Maker MV or MZ save.
 //!
-//! MV saves carry whatever the game's plugins put in them, which no editor can
-//! know the shape of in advance, so this walks the tree as it finds it rather
-//! than from a table of known fields.
+//! These saves carry whatever the game's plugins put in them, which no editor
+//! can know the shape of in advance, so this walks the tree as it finds it
+//! rather than from a table of known fields.
 
-use rpgsave::mv::json::{Json, Step};
-use rpgsave::mv::MvSave;
+use rpgsave::js::json::{Json, Step};
+use rpgsave::js::JsonSave;
 use rpgsave_protocol::*;
 
 use crate::backend::Reply;
@@ -55,7 +55,7 @@ fn kind_of(value: &Json) -> &'static str {
 }
 
 /// Lists what a value holds, numbering the children that can be opened.
-fn children_of(save: &MvSave, path: &[Step], value: &Json) -> Vec<ChildView> {
+fn children_of(save: &JsonSave, path: &[Step], value: &Json) -> Vec<ChildView> {
     let child = |step: Step, key: String, child: &Json| {
         let (preview, scalar) = describe(child);
         let node = child.is_container().then(|| {
@@ -91,7 +91,7 @@ fn children_of(save: &MvSave, path: &[Step], value: &Json) -> Vec<ChildView> {
     }
 }
 
-fn node_view(save: &MvSave, node: Option<u32>, path: &[Step], value: &Json) -> NodeView {
+fn node_view(save: &JsonSave, node: Option<u32>, path: &[Step], value: &Json) -> NodeView {
     let title = match path.last() {
         Some(Step::Key(key)) => key.clone(),
         Some(Step::Index(at)) => format!("[{at}]"),
@@ -107,7 +107,7 @@ fn node_view(save: &MvSave, node: Option<u32>, path: &[Step], value: &Json) -> N
         title,
         kind: if path.is_empty() { "file".to_owned() } else { kind_of(value).to_owned() },
         summary: if path.is_empty() {
-            format!("RPG Maker MV save · {summary}")
+            format!("RPG Maker {} save · {summary}", save.container.label())
         } else {
             summary
         },
@@ -116,18 +116,18 @@ fn node_view(save: &MvSave, node: Option<u32>, path: &[Step], value: &Json) -> N
     }
 }
 
-pub fn raw_root(save: &MvSave) -> NodeView {
+pub fn raw_root(save: &JsonSave) -> NodeView {
     node_view(save, None, &[], &save.root)
 }
 
-pub fn raw_node(save: &MvSave, node: u32) -> Option<NodeView> {
+pub fn raw_node(save: &JsonSave, node: u32) -> Option<NodeView> {
     let path = save.browse_path(node)?;
     let value = save.root.at(&path)?;
     Some(node_view(save, Some(node), &path, value))
 }
 
 pub fn set_raw_scalar(
-    save: &mut MvSave,
+    save: &mut JsonSave,
     node: Option<u32>,
     slot: &Slot,
     value: &Scalar,

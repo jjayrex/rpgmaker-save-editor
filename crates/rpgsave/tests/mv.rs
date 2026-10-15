@@ -1,8 +1,9 @@
-// RPG Maker MV
+// RPG Maker MV: the lz-string container, and the parts of the model it is
+// the only engine to use.
 
-use rpgsave::mv::json::{self, Json};
-use rpgsave::mv::save::{actor, ItemKind};
-use rpgsave::mv::{database, lzstring, MvSave};
+use rpgsave::js::json::{self, Json};
+use rpgsave::js::save::{actor, ItemKind};
+use rpgsave::js::{database, lzstring, JsonSave};
 
 fn fixtures() -> std::path::PathBuf {
     std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
@@ -12,13 +13,13 @@ fn fixture() -> Vec<u8> {
     std::fs::read(fixtures().join("mv_save.rpgsave")).expect("read")
 }
 
-fn open() -> MvSave {
-    MvSave::from_bytes(&fixture()).expect("open the save")
+fn open() -> JsonSave {
+    JsonSave::from_bytes(&fixture()).expect("open the save")
 }
 
 /// Re-encodes and reopens, which is what the editor does on the way to disk.
-fn reopen(save: &MvSave) -> MvSave {
-    MvSave::from_bytes(&save.to_bytes()).expect("reopen what we wrote")
+fn reopen(save: &JsonSave) -> JsonSave {
+    JsonSave::from_bytes(&save.to_bytes()).expect("reopen what we wrote")
 }
 
 // ------------------------------------------------------------ the container
@@ -71,7 +72,7 @@ fn an_edited_save_is_still_a_stream_the_engine_can_read() {
     let text = String::from_utf8(bytes.clone()).expect("base64 is text");
     let payload = lzstring::decompress_from_base64(&text).expect("unpacks");
     assert_eq!(payload, save.to_json_text(), "the file holds exactly the JSON we wrote");
-    assert_eq!(MvSave::from_bytes(&bytes).expect("reopens").gold(), 777);
+    assert_eq!(JsonSave::from_bytes(&bytes).expect("reopens").gold(), 777);
 }
 
 // ----------------------------------------------------------------- the JSON
@@ -295,24 +296,20 @@ fn an_edit_marks_the_save_dirty() {
 fn something_that_is_not_an_mv_save_is_refused() {
     // A Ruby Marshal stream, which is what the older engines write.
     let marshal = std::fs::read(fixtures().join("ace_save.rvdata2")).expect("read");
-    assert!(!MvSave::looks_like_save(&marshal));
-    assert!(MvSave::from_bytes(&marshal).is_err());
+    assert!(!JsonSave::looks_like_save(&marshal));
+    assert!(JsonSave::from_bytes(&marshal).is_err());
 
     // Base64 that is not a stream.
-    assert!(MvSave::from_bytes(b"AAAA").is_err());
+    assert!(JsonSave::from_bytes(b"AAAA").is_err());
 
-    // MV's successor stores the same JSON zlib-compressed, which comes out as
-    // base64 of a zlib header; saying which engine it is beats "not base64".
-    let mz = match MvSave::from_bytes(b"eJyrVgrOL8pMUbJSMtQDAB3+BM4=") {
-        Err(e) => e.to_string(),
-        Ok(_) => panic!("a zlib stream is not an MV save"),
-    };
-    assert!(mz.contains("MZ"), "{mz}");
+    // Base64 that unpacks as lz-string but holds no JSON: the reader has to
+    // get as far as the contents before it can tell, and still refuse.
+    assert!(JsonSave::from_bytes(b"eJyrVgrOL8pMUbJSMtQDAB3+BM4=").is_err());
 
     // MV's own bookkeeping files are the same format with no game state in
     // them, and saying so is more use than failing to find a party.
     let global = lzstring::compress_to_base64(r#"[{"globalId":"x","title":"Game"}]"#);
-    let message = match MvSave::from_bytes(global.as_bytes()) {
+    let message = match JsonSave::from_bytes(global.as_bytes()) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("a file with no party in it is not a save slot"),
     };
